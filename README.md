@@ -166,6 +166,47 @@ nix run github:alyraffauf/freepilot -- status
 Or add the flake input and install `packages.${system}.freepilot`. The package
 wraps `ddcutil` onto `PATH`. It builds for `x86_64-linux` and `aarch64-linux`.
 
+### NixOS
+
+The NixOS module installs freepilot and turns on `hardware.i2c`. That loads
+`i2c-dev` and gives `/dev/i2c-*` to the `i2c` group and to users at the
+local seat. Add yourself to the group to use freepilot over SSH or from
+services:
+
+```nix
+{config, inputs, ...}: {
+  imports = [inputs.freepilot.nixosModules.default];
+  programs.freepilot.enable = true;
+  users.users.<name>.extraGroups = [config.hardware.i2c.group];
+}
+```
+
+Log out and back in after changing groups.
+
+### Home Manager
+
+The Home Manager module installs freepilot and writes `config.toml` from
+`settings`:
+
+```nix
+{inputs, ...}: {
+  imports = [inputs.freepilot.homeModules.default];
+  programs.freepilot = {
+    enable = true;
+    settings = {
+      monitors.desk.serial = "ABC123";
+      profiles.coding = {
+        monitor = "desk";
+        picture-mode = "coding-dark";
+        brightness = 40;
+      };
+    };
+  };
+}
+```
+
+You still need i2c access from the NixOS side.
+
 ## Development
 
 `nix develop` provides Python, uv, and `ddcutil`. `nix flake check` runs
