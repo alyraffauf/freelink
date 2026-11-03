@@ -26,7 +26,11 @@ monitor yet.
 2. `freepilot status`, then change each setting on the OSD and rerun it.
 3. `freepilot mode coding-dark` and `freepilot input usb-c`. Confirm the
    picture-mode and input values.
-4. For each unconfirmed feature, read it with `freepilot get <name>`, change it
+4. Repeat `freepilot status` with `--transport i2c` and compare it with
+   ddcutil's output. Then try one write, such as `freepilot --transport i2c
+brightness 40`. If replies come back null or malformed, raise the waits
+   in `i2c.Timing` before anything else.
+5. For each unconfirmed feature, read it with `freepilot get <name>`, change it
    on the OSD, and read it again to learn its values.
 
 ## Open questions

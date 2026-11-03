@@ -25,7 +25,9 @@ lazy from freepilot import displays
 lazy from freepilot.config import config_path, load_config
 lazy from freepilot.ddcutil import Ddcutil
 lazy from freepilot.displays import SelectionError, select_display
+lazy from freepilot.i2c import I2c
 lazy from freepilot.monitor import Monitor
+lazy from freepilot.vcp import Transport
 
 
 def parse_int(text: str) -> int:
@@ -66,10 +68,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help=json_help)
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--display", help="ddcutil display number")
-    target.add_argument("--bus", help="I2C bus number, as in /dev/i2c-N")
+    target.add_argument("--bus", type=int, help="I2C bus number, as in /dev/i2c-N")
     target.add_argument(
         "--monitor",
         help="Config alias, serial, connector (DP-1), or part of the model name",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("ddcutil", "i2c"),
+        default="ddcutil",
+        help="Run ddcutil (default), or talk to /dev/i2c-N directly (untested)",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -149,6 +157,8 @@ def main(argv: list[str] | None = None) -> None:
     """Parse the command line and run one command."""
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    if arguments.transport == "i2c" and arguments.display:
+        parser.error("--display is ddcutil's numbering; use --bus or --monitor")
     try:
         output = dispatch(arguments)
     except FreepilotError as error:
@@ -168,24 +178,49 @@ def dispatch(arguments: argparse.Namespace) -> Output | None:
             return run(Monitor(connect(arguments)), arguments)
 
 
-def connect(arguments: argparse.Namespace) -> Ddcutil:
+def connect(arguments: argparse.Namespace) -> Transport:
     """Build the transport for the monitor the options name.
 
-    With --monitor, freepilot finds the monitor itself and hands ddcutil its
-    bus, so every transport picks the same monitor.
+    freepilot finds the bus itself for --monitor, so both transports pick
+    the same monitor. Without a selector, ddcutil uses its default display
+    and the i2c transport uses the only connected monitor.
     """
     if arguments.display:
         return Ddcutil(("--display", arguments.display))
-    if arguments.bus:
-        return Ddcutil(("--bus", arguments.bus))
-    if arguments.monitor:
-        aliases = load_config(config_path()).monitors
-        display = select_display(displays.find_displays(), arguments.monitor, aliases)
-        if display.bus is None:
-            message = f"{display.describe()} has no DDC bus in sysfs; try --bus"
-            raise SelectionError(message)
-        return Ddcutil(("--bus", str(display.bus)))
-    return Ddcutil()
+    bus = selected_bus(arguments)
+    if arguments.transport == "i2c":
+        return I2c(default_bus() if bus is None else bus)
+    return Ddcutil() if bus is None else Ddcutil(("--bus", str(bus)))
+
+
+def selected_bus(arguments: argparse.Namespace) -> int | None:
+    """Return the bus --bus or --monitor names, or None when neither was given."""
+    if arguments.bus is not None:
+        return arguments.bus
+    if not arguments.monitor:
+        return None
+    aliases = load_config(config_path()).monitors
+    display = select_display(displays.find_displays(), arguments.monitor, aliases)
+    if display.bus is None:
+        message = f"{display.describe()} has no DDC bus in sysfs; try --bus"
+        raise SelectionError(message)
+    return display.bus
+
+
+def default_bus() -> int:
+    """Return the bus of the only connected monitor that has one."""
+    found = [display for display in displays.find_displays() if display.bus is not None]
+    match found:
+        case [display] if display.bus is not None:
+            return display.bus
+        case []:
+            message = "no connected monitor has a DDC bus in sysfs; pass --bus"
+        case _:
+            names = ", ".join(display.describe() for display in found)
+            message = (
+                f"several monitors are connected ({names}); pick one with --monitor"
+            )
+    raise SelectionError(message)
 
 
 if __name__ == "__main__":

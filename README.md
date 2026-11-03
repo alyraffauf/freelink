@@ -52,6 +52,14 @@ serial = "ABC123"
 connector = "HDMI-A-1"
 ```
 
+### Talk to the bus directly
+
+`--transport i2c` skips ddcutil and speaks DDC/CI on `/dev/i2c-N` itself.
+It takes the same bus lock as ddcutil, retries busy replies, and never
+resends a write that failed. It hasn't been tried on a monitor yet, so
+ddcutil stays the default. Without `--bus` or `--monitor`, it uses the only
+connected monitor. `--display` only works with ddcutil.
+
 ### JSON
 
 Add `--json`, before or after the command, to make `status`, `get`, `codes`,

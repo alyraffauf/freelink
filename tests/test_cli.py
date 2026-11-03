@@ -5,9 +5,9 @@ import json
 lazy from pathlib import Path
 
 import pytest
-from conftest import FakeRun, make_connector, make_edid
+from conftest import FakeDevice, FakeRun, Log, make_connector, make_edid
 
-from freepilot import cli, ddcutil, displays
+from freepilot import cli, ddcutil, displays, i2c
 
 
 @pytest.mark.parametrize(("text", "code"), [("brightness", 0x10), ("0xdc", 0xDC)])
@@ -226,3 +226,56 @@ def test_monitor_problems_exit_cleanly(
         cli.main(["--monitor", selector, "status"])
     assert exit_info.value.code == 1
     assert message in capsys.readouterr().err
+
+
+@pytest.fixture
+def fake_device(monkeypatch: pytest.MonkeyPatch) -> FakeDevice:
+    """Replace /dev/i2c-N with a device that logs what it is sent."""
+    log: Log = []
+    device = FakeDevice(log, [bytes.fromhex("6e 88 02 00 10 00 00 64 00 2a ea")])
+
+    def open_device(bus: int) -> FakeDevice:
+        log.append(("open", bus))
+        return device
+
+    monkeypatch.setattr(i2c.LinuxDevice, "open", open_device)
+    return device
+
+
+@pytest.mark.usefixtures("fake_sysfs")
+def test_i2c_transport_writes_to_the_selected_bus(fake_device: FakeDevice) -> None:
+    """--transport i2c opens the monitor's bus and sends the Set request."""
+    cli.main(["--transport", "i2c", "--monitor", "DP-1", "brightness", "40"])
+    assert ("open", 4) in fake_device.log
+    assert ("write", "51 84 03 10 00 28 80") in fake_device.log
+
+
+@pytest.mark.usefixtures("fake_sysfs")
+def test_i2c_transport_defaults_to_the_only_monitor(
+    fake_device: FakeDevice, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without a selector, the only connected monitor with a bus is used."""
+    cli.main(["--transport", "i2c", "get", "brightness"])
+    assert ("open", 4) in fake_device.log
+    assert capsys.readouterr().out.split() == ["brightness", "42/100"]
+
+
+def test_i2c_transport_refuses_several_monitors(
+    fake_sysfs: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With two monitors and no selector, the i2c transport asks for one."""
+    make_connector(fake_sysfs / "drm", "card1-DP-2", ddc_bus=5)
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["--transport", "i2c", "status"])
+    assert exit_info.value.code == 1
+    assert "pick one with --monitor" in capsys.readouterr().err
+
+
+def test_i2c_transport_rejects_display_numbers(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--display is ddcutil's numbering, so it is a usage error with i2c."""
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["--transport", "i2c", "--display", "1", "status"])
+    assert exit_info.value.code == 2
+    assert "--display is ddcutil's numbering" in capsys.readouterr().err

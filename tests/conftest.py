@@ -5,7 +5,7 @@ lazy from pathlib import Path
 
 import pytest
 
-from freepilot import ddcutil, monitor
+from freepilot import ddcutil, i2c, monitor
 
 TERSE = """\
 VCP dc SNC x31
@@ -41,6 +41,7 @@ class FakeRun:
 def no_write_delays(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skip the post-write sleeps in every test."""
     monkeypatch.setattr(monitor.time, "sleep", lambda _: None)
+    monkeypatch.setattr(i2c.time, "sleep", lambda _: None)
 
 
 @pytest.fixture
@@ -101,3 +102,72 @@ def make_connector(  # noqa: PLR0913 - one keyword per sysfs file
     for bus in child_buses:
         (connector / f"i2c-{bus}").mkdir()
     return connector
+
+
+# Calls in order: bare names, or (name, argument) pairs.
+type Log = list[str | tuple[str, object]]
+
+
+class FakeClock:
+    """Record waits into a shared log and advance time by them."""
+
+    def __init__(self, log: Log) -> None:
+        """Start at zero."""
+        self.now = 0.0
+        self.log = log
+
+    def monotonic(self) -> float:
+        """Return the current fake time."""
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        """Advance time and log the wait."""
+        self.now += seconds
+        self.log.append(("sleep", seconds))
+
+
+class FakeDevice:
+    """Answer reads from a script and log every call."""
+
+    def __init__(
+        self,
+        log: Log,
+        replies: list[bytes | OSError] | None = None,
+        *,
+        busy_polls: int = 0,
+        write_error: OSError | None = None,
+        short_write: bool = False,
+    ) -> None:
+        """Store the script."""
+        self.log = log
+        self.replies = list(replies or [])
+        self.busy_polls = busy_polls
+        self.write_error = write_error
+        self.short_write = short_write
+
+    def write(self, data: bytes) -> int:
+        """Log the bytes written."""
+        self.log.append(("write", data.hex(" ")))
+        if self.write_error:
+            raise self.write_error
+        return len(data) - 1 if self.short_write else len(data)
+
+    def read(self, size: int) -> bytes:
+        """Return the next scripted reply."""
+        self.log.append(("read", size))
+        reply = self.replies.pop(0)
+        if isinstance(reply, OSError):
+            raise reply
+        return reply
+
+    def try_lock(self) -> bool:
+        """Report the lock busy for the first busy_polls tries."""
+        self.log.append("try_lock")
+        if self.busy_polls:
+            self.busy_polls -= 1
+            return False
+        return True
+
+    def close(self) -> None:
+        """Log the close."""
+        self.log.append("close")
