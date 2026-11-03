@@ -3,6 +3,7 @@
 import pytest
 
 from freepilot import render
+from freepilot.features import BENQ_RD
 from freepilot.vcp import Reading
 
 
@@ -25,7 +26,7 @@ def test_format_reading_follows_the_feature_kind(
     reading: Reading | None, shown: str
 ) -> None:
     """Choices show by name, levels as current/max, raw and unknown codes in hex."""
-    assert render.format_reading(reading) == shown
+    assert render.format_reading(reading, BENQ_RD) == shown
 
 
 @pytest.mark.parametrize(
@@ -43,13 +44,17 @@ def test_reading_json_adds_label_and_max_only_where_they_mean_something(
     code: int, reading: Reading, extra: dict[str, object]
 ) -> None:
     """Choice readings get a label; max only appears where it is meaningful."""
-    expected = {"code": code, "name": render.feature_name(code), "value": reading.value}
-    assert render.reading_json(code, reading) == expected | extra
+    expected = {
+        "code": code,
+        "name": BENQ_RD.feature_name(code),
+        "value": reading.value,
+    }
+    assert render.reading_json(code, reading, BENQ_RD) == expected | extra
 
 
 def test_reading_json_marks_no_answer_as_null() -> None:
     """A code the monitor did not answer has a null value and no extras."""
-    assert render.reading_json(0x10, None) == {
+    assert render.reading_json(0x10, None, BENQ_RD) == {
         "code": 0x10,
         "name": "brightness",
         "kind": "continuous",

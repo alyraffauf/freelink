@@ -38,6 +38,8 @@ def test_monitor_aliases_load(tmp_path: Path) -> None:
         ("[monitors.desk]\nbus = 7", "unknown keys: bus"),
         ("[monitors.desk]\nserial = 7", "serial must be a string"),
         ("[monitors.desk]", "needs serial or connector"),
+        ('[monitors.desk]\nmodel = "benq-rd"', "needs serial or connector"),
+        ('[monitors.desk]\nserial = "A"\nmodel = "acme"', "model must be one of"),
         ("[monitors", "config.toml"),
     ],
 )

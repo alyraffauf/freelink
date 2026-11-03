@@ -90,3 +90,17 @@ class Ddcutil:
     def set(self, code: int, value: int) -> None:
         """Write one VCP code."""
         self.run("setvcp", f"0x{code:02x}", str(value))
+
+    def capabilities(self) -> str:
+        """Fetch the raw capability string."""
+        return parse_capabilities_output(self.run("capabilities", "--terse"))
+
+
+def parse_capabilities_output(output: str) -> str:
+    """Take the string from ddcutil's 'Unparsed capabilities string: ...' line."""
+    for line in output.splitlines():
+        _, found, rest = line.partition("capabilities string:")
+        if found:
+            return rest.strip()
+    message = f"no capability string in ddcutil output: {output.strip()!r}"
+    raise DdcutilError(message)

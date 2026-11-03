@@ -38,3 +38,7 @@ class Transport(Protocol):
     def set(self, code: int, value: int) -> None:
         """Write one VCP code."""
         ...
+
+    def capabilities(self) -> str:
+        """Fetch the monitor's raw capability string."""
+        ...

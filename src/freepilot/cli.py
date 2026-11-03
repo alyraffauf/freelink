@@ -1,4 +1,4 @@
-"""Control BenQ RD series monitors over DDC/CI through ddcutil."""
+"""Control monitors over DDC/CI, with BenQ RD series extras."""
 
 import argparse
 import json
@@ -6,28 +6,38 @@ from typing import NoReturn
 
 from freepilot.errors import FreepilotError
 from freepilot.features import (
-    FEATURES,
-    INPUT_SOURCES,
+    BENQ_INPUTS,
+    BENQ_RD_FEATURES,
+    FEATURE_SETS,
     MAX_LEVEL,
+    MCCS_INPUTS,
     MUTE_STATES,
     PICTURE_MODES,
 )
 from freepilot.render import (
     Output,
+    capabilities_output,
     codes_output,
     displays_output,
     readings_output,
     status_output,
 )
 
-# Only monitor commands need ddcutil, so codes and --help skip loading it.
-lazy from freepilot import displays
-lazy from freepilot.config import config_path, load_config
-lazy from freepilot.ddcutil import Ddcutil
-lazy from freepilot.displays import SelectionError, select_display
-lazy from freepilot.i2c import I2c
-lazy from freepilot.monitor import Monitor
+# Only monitor commands need a transport, so --help skips loading them.
+lazy from freepilot import displays, targets
+lazy from freepilot.capabilities import (
+    Capabilities,
+    CapabilityError,
+    parse_capabilities,
+    write_problem,
+)
+lazy from freepilot.config import Config, config_path, load_config
+lazy from freepilot.features import FeatureSet
+lazy from freepilot.monitor import Monitor, WriteCheck
 lazy from freepilot.vcp import Transport
+
+# Names every feature set uses for the same codes, so parsing needs no monitor.
+INPUT_NAMES = tuple(dict.fromkeys([*BENQ_INPUTS, *MCCS_INPUTS]))
 
 
 def parse_int(text: str) -> int:
@@ -46,8 +56,8 @@ def percent(text: str) -> int:
 
 def resolve_code(text: str) -> int:
     """Accept a feature name or a numeric VCP code."""
-    if text in FEATURES:
-        return FEATURES[text].code
+    if text in BENQ_RD_FEATURES:
+        return BENQ_RD_FEATURES[text].code
     try:
         return parse_int(text)
     except ValueError:
@@ -79,7 +89,23 @@ def build_parser() -> argparse.ArgumentParser:
         default="ddcutil",
         help="Run ddcutil (default), or talk to /dev/i2c-N directly (untested)",
     )
+    parser.add_argument(
+        "--model",
+        choices=FEATURE_SETS,
+        help="Feature set to use instead of identifying the monitor by its EDID",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Refuse writes the monitor's capability string doesn't list",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    commands.add_parser(
+        "capabilities",
+        parents=[output],
+        help="Show the monitor's capability string, with freepilot's names",
+    )
 
     commands.add_parser("list", parents=[output], help="List connected monitors")
 
@@ -92,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("name", choices=PICTURE_MODES)
 
     source = commands.add_parser("input", help="Switch the input source")
-    source.add_argument("name", choices=INPUT_SOURCES)
+    source.add_argument("name", choices=INPUT_NAMES)
 
     for name in ("brightness", "contrast", "volume"):
         level = commands.add_parser(name, help=f"Set {name}, 0-100")
@@ -118,13 +144,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(monitor: Monitor, arguments: argparse.Namespace) -> Output | None:
     """Carry out one monitor command. Read commands return what to show."""
+    features = monitor.features
     match arguments.command:
         case "status":
-            return status_output(monitor.status())
+            return status_output(monitor.status(), features)
+        case "capabilities":
+            return capabilities_output(monitor.capabilities(), features)
         case "get":
-            return readings_output(
-                arguments.features, monitor.read(*arguments.features)
-            )
+            readings = monitor.read(*arguments.features)
+            return readings_output(arguments.features, readings, features)
         case "mode":
             monitor.set_picture_mode(arguments.name)
         case "input":
@@ -168,59 +196,41 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def dispatch(arguments: argparse.Namespace) -> Output | None:
-    """Run commands that need no monitor directly, the rest through one."""
-    match arguments.command:
-        case "codes":
-            return codes_output()
-        case "list":
-            return displays_output(displays.find_displays())
-        case _:
-            return run(Monitor(connect(arguments)), arguments)
+    """Resolve the monitor a command means, then run the command on it."""
+    connected = displays.find_displays()
+    if arguments.command == "list":
+        return displays_output(connected)
+    selection = targets.Selection(
+        display_number=arguments.display,
+        bus=arguments.bus,
+        monitor=arguments.monitor,
+        transport=arguments.transport,
+        model=arguments.model,
+    )
+    # Only --monitor needs the config, so a broken config can't stop the rest.
+    config = load_config(config_path()) if selection.monitor else Config()
+    target = targets.resolve(selection, connected, config.monitors)
+    if arguments.command == "codes":
+        return codes_output(target.features)
+    transport = targets.connect(selection, target)
+    check = strict_check(transport, target.features) if arguments.strict else None
+    return run(Monitor(transport, target.features, check), arguments)
 
 
-def connect(arguments: argparse.Namespace) -> Transport:
-    """Build the transport for the monitor the options name.
+def strict_check(transport: Transport, features: FeatureSet) -> WriteCheck:
+    """Refuse writes the capability string doesn't list. Fetches it once."""
+    fetched: list[Capabilities] = []
 
-    freepilot finds the bus itself for --monitor, so both transports pick
-    the same monitor. Without a selector, ddcutil uses its default display
-    and the i2c transport uses the only connected monitor.
-    """
-    if arguments.display:
-        return Ddcutil(("--display", arguments.display))
-    bus = selected_bus(arguments)
-    if arguments.transport == "i2c":
-        return I2c(default_bus() if bus is None else bus)
-    return Ddcutil() if bus is None else Ddcutil(("--bus", str(bus)))
+    def check(code: int, value: int) -> None:
+        if not fetched:
+            fetched.append(parse_capabilities(transport.capabilities()))
+        feature = features.feature_for(code)
+        is_choice = feature is not None and feature.kind == "choice"
+        if problem := write_problem(fetched[0], code, value, check_value=is_choice):
+            message = f"{problem}; drop --strict to send it anyway"
+            raise CapabilityError(message)
 
-
-def selected_bus(arguments: argparse.Namespace) -> int | None:
-    """Return the bus --bus or --monitor names, or None when neither was given."""
-    if arguments.bus is not None:
-        return arguments.bus
-    if not arguments.monitor:
-        return None
-    aliases = load_config(config_path()).monitors
-    display = select_display(displays.find_displays(), arguments.monitor, aliases)
-    if display.bus is None:
-        message = f"{display.describe()} has no DDC bus in sysfs; try --bus"
-        raise SelectionError(message)
-    return display.bus
-
-
-def default_bus() -> int:
-    """Return the bus of the only connected monitor that has one."""
-    found = [display for display in displays.find_displays() if display.bus is not None]
-    match found:
-        case [display] if display.bus is not None:
-            return display.bus
-        case []:
-            message = "no connected monitor has a DDC bus in sysfs; pass --bus"
-        case _:
-            names = ", ".join(display.describe() for display in found)
-            message = (
-                f"several monitors are connected ({names}); pick one with --monitor"
-            )
-    raise SelectionError(message)
+    return check
 
 
 if __name__ == "__main__":

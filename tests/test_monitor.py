@@ -37,6 +37,10 @@ class FakeTransport:
         self.writes.append((code, value))
         self.log.append(f"set 0x{code:02x}")
 
+    def capabilities(self) -> str:
+        """Return a short capability string."""
+        return "(vcp(10 60(0F 11)))"
+
 
 def test_status_keeps_raw_readings_by_name() -> None:
     """Status returns every status feature's raw reading, None when missing."""

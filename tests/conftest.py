@@ -5,7 +5,7 @@ lazy from pathlib import Path
 
 import pytest
 
-from freepilot import ddcutil, i2c, monitor
+from freepilot import ddcutil, displays, i2c, monitor
 
 TERSE = """\
 VCP dc SNC x31
@@ -17,6 +17,12 @@ VCP 8d SNC x02
 VCP e4 ERR
 """
 
+CAPABILITIES = (
+    "Unparsed capabilities string: "
+    "(prot(monitor)type(LCD)model(RD280U)"
+    "vcp(10 12 60(0F 11 13) 62 8D(01 02) DC(30 31)))"
+)
+
 
 class FakeRun:
     """Stand in for subprocess.run: record calls, answer getvcp from output."""
@@ -24,6 +30,7 @@ class FakeRun:
     def __init__(self, output: str = TERSE, returncode: int = 0) -> None:
         """Store the reply every call returns."""
         self.output = output
+        self.capabilities = CAPABILITIES
         self.returncode = returncode
         self.calls: list[list[str]] = []
 
@@ -32,7 +39,13 @@ class FakeRun:
     ) -> subprocess.CompletedProcess[str]:
         """Record the command and return the canned reply."""
         self.calls.append(command)
-        stdout = self.output if "getvcp" in command else ""
+        stdout = (
+            self.output
+            if "getvcp" in command
+            else self.capabilities
+            if "capabilities" in command
+            else ""
+        )
         stderr = "" if self.returncode == 0 else "Display not found"
         return subprocess.CompletedProcess(command, self.returncode, stdout, stderr)
 
@@ -171,3 +184,19 @@ class FakeDevice:
     def close(self) -> None:
         """Log the close."""
         self.log.append("close")
+
+
+@pytest.fixture(autouse=True)
+def sysfs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Give every test a fake sysfs and its own config path.
+
+    The fake has a BenQ RD280U on bus 4 and an HDMI monitor with no bus or
+    EDID, so tests never see the host's real monitors.
+    """
+    root = tmp_path / "drm"
+    edid = make_edid(texts={0xFC: b"BenQ RD280U\n", 0xFF: b"ABC123\n"})
+    make_connector(root, "card1-DP-1", edid=edid, ddc_bus=4)
+    make_connector(root, "card1-HDMI-A-1")
+    monkeypatch.setattr(displays, "DRM_ROOT", root)
+    monkeypatch.setenv("FREEPILOT_CONFIG", str(tmp_path / "config.toml"))
+    return tmp_path

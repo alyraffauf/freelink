@@ -7,7 +7,7 @@ lazy from pathlib import Path
 import pytest
 from conftest import FakeDevice, FakeRun, Log, make_connector, make_edid
 
-from freepilot import cli, ddcutil, displays, i2c
+from freepilot import cli, ddcutil, i2c
 
 
 @pytest.mark.parametrize(("text", "code"), [("brightness", 0x10), ("0xdc", 0xDC)])
@@ -173,19 +173,6 @@ def test_json_codes_lists_kinds_and_values(capsys: pytest.CaptureFixture[str]) -
     assert features["kvm"]["values_confirmed"] is False
 
 
-@pytest.fixture
-def fake_sysfs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point discovery at a fake sysfs with one BenQ on bus 4, and no config."""
-    root = tmp_path / "drm"
-    edid = make_edid(texts={0xFC: b"BenQ RD280U\n", 0xFF: b"ABC123\n"})
-    make_connector(root, "card1-DP-1", edid=edid, ddc_bus=4)
-    make_connector(root, "card1-HDMI-A-1")
-    monkeypatch.setattr(displays, "DRM_ROOT", root)
-    monkeypatch.setenv("FREEPILOT_CONFIG", str(tmp_path / "config.toml"))
-    return tmp_path
-
-
-@pytest.mark.usefixtures("fake_sysfs")
 def test_list_shows_connected_monitors(capsys: pytest.CaptureFixture[str]) -> None:
     """List shows each monitor's connector, bus, and identity."""
     cli.main(["list"])
@@ -199,21 +186,20 @@ def test_list_shows_connected_monitors(capsys: pytest.CaptureFixture[str]) -> No
     assert first["serial"] == "ABC123"
 
 
-@pytest.mark.usefixtures("fake_sysfs")
 def test_monitor_resolves_to_a_ddcutil_bus(fake_run: FakeRun) -> None:
     """--monitor finds the bus itself and passes it to ddcutil."""
     cli.main(["--monitor", "rd280u", "brightness", "40"])
     assert fake_run.calls == [["ddcutil", "--bus", "4", "setvcp", "0x10", "40"]]
 
 
-def test_monitor_uses_config_aliases(fake_sysfs: Path, fake_run: FakeRun) -> None:
+def test_monitor_uses_config_aliases(sysfs: Path, fake_run: FakeRun) -> None:
     """A config alias names a monitor by serial."""
-    (fake_sysfs / "config.toml").write_text('[monitors.desk]\nserial = "ABC123"\n')
+    (sysfs / "config.toml").write_text('[monitors.desk]\nserial = "ABC123"\n')
     cli.main(["--monitor", "desk", "volume", "5"])
     assert fake_run.calls[0][:3] == ["ddcutil", "--bus", "4"]
 
 
-@pytest.mark.usefixtures("fake_sysfs", "fake_run")
+@pytest.mark.usefixtures("fake_run")
 @pytest.mark.parametrize(
     ("selector", "message"),
     [("HDMI-A-1", "has no DDC bus"), ("nope", "no monitor matches")],
@@ -242,7 +228,6 @@ def fake_device(monkeypatch: pytest.MonkeyPatch) -> FakeDevice:
     return device
 
 
-@pytest.mark.usefixtures("fake_sysfs")
 def test_i2c_transport_writes_to_the_selected_bus(fake_device: FakeDevice) -> None:
     """--transport i2c opens the monitor's bus and sends the Set request."""
     cli.main(["--transport", "i2c", "--monitor", "DP-1", "brightness", "40"])
@@ -250,7 +235,6 @@ def test_i2c_transport_writes_to_the_selected_bus(fake_device: FakeDevice) -> No
     assert ("write", "51 84 03 10 00 28 80") in fake_device.log
 
 
-@pytest.mark.usefixtures("fake_sysfs")
 def test_i2c_transport_defaults_to_the_only_monitor(
     fake_device: FakeDevice, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -261,10 +245,10 @@ def test_i2c_transport_defaults_to_the_only_monitor(
 
 
 def test_i2c_transport_refuses_several_monitors(
-    fake_sysfs: Path, capsys: pytest.CaptureFixture[str]
+    sysfs: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """With two monitors and no selector, the i2c transport asks for one."""
-    make_connector(fake_sysfs / "drm", "card1-DP-2", ddc_bus=5)
+    make_connector(sysfs / "drm", "card1-DP-2", ddc_bus=5)
     with pytest.raises(SystemExit) as exit_info:
         cli.main(["--transport", "i2c", "status"])
     assert exit_info.value.code == 1
@@ -279,3 +263,149 @@ def test_i2c_transport_rejects_display_numbers(
         cli.main(["--transport", "i2c", "--display", "1", "status"])
     assert exit_info.value.code == 2
     assert "--display is ddcutil's numbering" in capsys.readouterr().err
+
+
+def test_capabilities_names_codes_and_lists_unlisted_features(
+    fake_run: FakeRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Capabilities shows each listed code with freepilot's names for it."""
+    cli.main(["capabilities"])
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == ["model", "RD280U"]
+    assert (
+        "0x60  input                    0x0f displayport, 0x11 hdmi, 0x13 usb-c"
+        in lines
+    )
+    assert "0x8d  mute                     0x01 on, 0x02 off" in lines
+    assert lines[-1].startswith("not listed by the monitor: ")
+    assert "kvm" in lines[-1]
+    assert "brightness" not in lines[-1]
+    assert fake_run.calls == [["ddcutil", "capabilities", "--terse"]]
+
+
+def test_capabilities_json(
+    fake_run: FakeRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Capabilities --json carries the parsed codes and the raw string."""
+    cli.main(["capabilities", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert data["model"] == "RD280U"
+    assert {
+        "code": 0x60,
+        "name": "input",
+        "values": [0x0F, 0x11, 0x13],
+        "malformed": False,
+    } in data["vcp"]
+    assert "kvm" in data["unlisted"]
+    assert fake_run.calls[0][1] == "capabilities"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["input", "hdmi"], ["brightness", "40"], ["mode", "coding-dark"]],
+)
+def test_strict_allows_listed_writes(fake_run: FakeRun, argv: list[str]) -> None:
+    """--strict fetches capabilities once, then sends writes they list."""
+    cli.main(["--strict", *argv])
+    assert [call[1] for call in fake_run.calls] == ["capabilities", "setvcp"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["mode", "coding-paper"], "does not list value 0x3a for VCP 0xdc"),
+        (["set", "kvm", "1"], "does not list VCP 0xe4"),
+    ],
+)
+def test_strict_refuses_unlisted_writes(
+    fake_run: FakeRun, capsys: pytest.CaptureFixture[str], argv: list[str], message: str
+) -> None:
+    """--strict refuses unlisted codes and choice values without writing."""
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["--strict", *argv])
+    assert exit_info.value.code == 1
+    assert message in capsys.readouterr().err
+    assert all(call[1] != "setvcp" for call in fake_run.calls)
+
+
+def test_writes_skip_capabilities_without_strict(fake_run: FakeRun) -> None:
+    """Without --strict, a write is one ddcutil call."""
+    cli.main(["set", "kvm", "1"])
+    assert [call[1] for call in fake_run.calls] == ["setvcp"]
+
+
+def write_dell(sysfs: Path) -> None:
+    """Replace the fake BenQ with a Dell monitor on the same bus."""
+    root = sysfs / "drm"
+    connector = root / "card1-DP-1"
+    (connector / "edid").write_bytes(
+        make_edid(manufacturer=b"\x10\xac", texts={0xFC: b"DELL U2723QE\n"})
+    )
+
+
+def test_other_monitors_get_the_standard_set(
+    sysfs: Path, fake_run: FakeRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A non-BenQ monitor's status skips picture mode and uses MCCS names."""
+    write_dell(sysfs)
+    fake_run.output = "VCP 60 SNC x11\nVCP 10 C 42 100\n"
+    cli.main(["status"])
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == ["input", "hdmi"]
+    assert not any(line.startswith("picture-mode") for line in lines)
+    assert "0xdc" not in fake_run.calls[0]
+
+
+@pytest.mark.usefixtures("fake_run")
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["mode", "coding-dark"], "picture-mode isn't available for Standard MCCS"),
+        (["input", "usb-c"], "usb-c isn't a known input for Standard MCCS"),
+    ],
+)
+def test_benq_names_are_refused_on_other_monitors(
+    sysfs: Path, capsys: pytest.CaptureFixture[str], argv: list[str], message: str
+) -> None:
+    """BenQ picture modes and input values aren't sent to other monitors."""
+    write_dell(sysfs)
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(argv)
+    assert exit_info.value.code == 1
+    assert message in capsys.readouterr().err
+
+
+def test_model_overrides_identification(sysfs: Path, fake_run: FakeRun) -> None:
+    """--model benq-rd uses the BenQ set whatever the EDID says."""
+    write_dell(sysfs)
+    cli.main(["--model", "benq-rd", "input", "usb-c"])
+    assert fake_run.calls == [["ddcutil", "setvcp", "0x60", "19"]]
+
+
+def test_alias_model_overrides_identification(sysfs: Path, fake_run: FakeRun) -> None:
+    """A config alias can force a feature set too."""
+    write_dell(sysfs)
+    (sysfs / "config.toml").write_text(
+        '[monitors.desk]\nconnector = "DP-1"\nmodel = "benq-rd"\n'
+    )
+    cli.main(["--monitor", "desk", "mode", "srgb"])
+    assert fake_run.calls == [["ddcutil", "--bus", "4", "setvcp", "0xdc", "10"]]
+
+
+def test_unidentified_monitors_get_the_standard_set(
+    sysfs: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With no monitor to identify, codes shows the standard set."""
+    write_dell(sysfs)
+    cli.main(["codes"])
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "Standard MCCS controls (mccs)"
+    assert len(lines) == 7
+
+
+def test_codes_shows_the_benq_set_for_benq_monitors(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The fake BenQ RD280U is identified, so codes shows the BenQ set."""
+    cli.main(["codes"])
+    assert capsys.readouterr().out.splitlines()[0] == "BenQ RD series (benq-rd)"

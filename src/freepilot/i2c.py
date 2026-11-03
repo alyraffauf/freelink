@@ -28,7 +28,12 @@ REQUEST_SEED = 0x6E  # requests checksum the display's write address first
 REPLY_SEED = 0x50  # replies checksum the host's virtual address first
 LENGTH_FLAG = 0x80
 GET_REQUEST, GET_REPLY, SET_REQUEST = 0x01, 0x02, 0x03
+CAPABILITIES_REQUEST, CAPABILITIES_REPLY = 0xF3, 0xE3
 GET_REPLY_SIZE = 11
+# Source, length, opcode, two offset bytes, up to 32 data bytes, checksum.
+CAPABILITIES_READ_SIZE = 38
+CAPABILITIES_FRAGMENT_MAX = 32
+CAPABILITIES_MAX = 4096
 MAX_CODE, MAX_VALUE = 0xFF, 0xFFFF
 # I/O errors that mean the monitor did not acknowledge, so a retry may help.
 NO_ANSWER = frozenset({errno.ENXIO, errno.EREMOTEIO, errno.EIO, errno.EAGAIN})
@@ -68,6 +73,12 @@ def encode_set(code: int, value: int) -> bytes:
     check_range("VCP code", code, MAX_CODE)
     check_range("value", value, MAX_VALUE)
     return encode(bytes([SET_REQUEST, code, *value.to_bytes(2, "big")]))
+
+
+def encode_capabilities(offset: int) -> bytes:
+    """Build a Capabilities Request for the fragment at a byte offset."""
+    check_range("capabilities offset", offset, MAX_VALUE)
+    return encode(bytes([CAPABILITIES_REQUEST, *offset.to_bytes(2, "big")]))
 
 
 def check_range(what: str, number: int, maximum: int) -> None:
@@ -126,6 +137,23 @@ def decode_get_reply(data: bytes, code: int) -> Reading:
         case _:
             message = f"reply result code {result} is not 0 or 1"
             raise MalformedReplyError(message)
+
+
+def decode_capabilities_reply(data: bytes, offset: int) -> bytes:
+    """Return a capabilities fragment's data. Empty data ends the string."""
+    payload = decode_frame(data)
+    if payload[0] != CAPABILITIES_REPLY or len(payload) < 3:  # noqa: PLR2004
+        message = f"expected a capabilities reply, got {payload.hex(' ')}"
+        raise MalformedReplyError(message)
+    echoed = int.from_bytes(payload[1:3], "big")
+    if echoed != offset:
+        message = f"asked for capabilities at {offset}, reply is for {echoed}"
+        raise MalformedReplyError(message)
+    fragment = payload[3:]
+    if len(fragment) > CAPABILITIES_FRAGMENT_MAX:
+        message = f"capabilities fragment is {len(fragment)} bytes"
+        raise MalformedReplyError(message)
+    return fragment
 
 
 class Device(Protocol):
@@ -219,6 +247,8 @@ class Timing:
     """
 
     get_waits: tuple[float, ...] = (0.04, 0.08, 0.12, 0.2)
+    capabilities_waits: tuple[float, ...] = (0.05, 0.1, 0.15, 0.25)
+    capabilities_timeout: float = 10.0
     set_wait: float = 0.05
     lock_timeout: float = 2.0
     lock_poll: float = 0.05
@@ -276,26 +306,75 @@ class I2c:
             self.write(request)
             self.clock.sleep(self.timing.set_wait)
 
+    def capabilities(self) -> str:
+        """Read the capability string fragment by fragment under one lock.
+
+        Each fragment's offset must match the one asked for. The string ends
+        at an empty fragment, and is limited in size and time.
+        """
+        data = bytearray()
+        with self.session():
+            deadline = self.clock.monotonic() + self.timing.capabilities_timeout
+            while fragment := self.capabilities_fragment(len(data)):
+                data += fragment
+                if len(data) > CAPABILITIES_MAX:
+                    message = f"capability string is over {CAPABILITIES_MAX} bytes"
+                    raise MalformedReplyError(message)
+                if self.clock.monotonic() > deadline:
+                    message = "reading the capability string took too long"
+                    raise I2cError(message)
+        return data.decode("ascii", "replace").rstrip("\0")
+
+    def capabilities_fragment(self, offset: int) -> bytes:
+        """Fetch one fragment. A null reply here is an error, not an end."""
+        try:
+            return self.exchange(
+                encode_capabilities(offset),
+                CAPABILITIES_READ_SIZE,
+                lambda data: decode_capabilities_reply(data, offset),
+                self.timing.capabilities_waits,
+            )
+        except NullReplyError:
+            message = f"monitor gave no capabilities fragment at offset {offset}"
+            raise I2cError(message) from None
+
     def get_one(self, code: int, request: bytes) -> Reading:
-        """Send a request until a usable reply comes back or tries run out.
+        """Read one code.
 
         If every try gets the null message, the reading is None: the monitor
         may be busy or may not support the code, and freepilot can't tell.
-        Other failures on the last try are raised.
         """
-        failure: I2cError | None = None
-        for wait in self.timing.get_waits:
+        try:
+            return self.exchange(
+                request,
+                GET_REPLY_SIZE,
+                lambda data: decode_get_reply(data, code),
+                self.timing.get_waits,
+            )
+        except NullReplyError:
+            return Reading(code, None)
+
+    def exchange[T](
+        self,
+        request: bytes,
+        size: int,
+        decode: Callable[[bytes], T],
+        waits: tuple[float, ...],
+    ) -> T:
+        """Send a request until a usable reply comes back or tries run out.
+
+        Each try resends the whole request and waits the next, longer, time
+        before reading. The last try's failure is raised.
+        """
+        failure = I2cError("no tries configured")
+        for wait in waits:
             try:
                 self.write(request)
                 self.clock.sleep(wait)
-                return decode_get_reply(self.read(GET_REPLY_SIZE), code)
-            except NullReplyError:
-                failure = None
+                return decode(self.read(size))
             except I2cError as error:
                 failure = error
-        if failure is not None:
-            raise failure
-        return Reading(code, None)
+        raise failure
 
     def open(self) -> Device:
         """Open the bus, explaining the usual reasons it fails."""

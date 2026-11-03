@@ -55,3 +55,17 @@ def test_missing_ddcutil_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ddcutil.subprocess, "run", missing)
     with pytest.raises(DdcutilError, match="not installed"):
         Ddcutil().get(0x10)
+
+
+def test_capabilities_reads_the_terse_line(fake_run: FakeRun) -> None:
+    """The string comes from ddcutil's 'Unparsed capabilities string:' line."""
+    fake_run.capabilities = "Unparsed capabilities string: (prot(monitor)vcp(10 12))\n"
+    assert Ddcutil().capabilities() == "(prot(monitor)vcp(10 12))"
+    assert fake_run.calls == [["ddcutil", "capabilities", "--terse"]]
+
+
+def test_capabilities_without_the_line_is_an_error(fake_run: FakeRun) -> None:
+    """Output without a capability string is a DdcutilError."""
+    fake_run.capabilities = "Display not found\n"
+    with pytest.raises(DdcutilError, match="no capability string"):
+        Ddcutil().capabilities()

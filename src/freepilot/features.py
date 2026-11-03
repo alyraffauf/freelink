@@ -1,9 +1,12 @@
-"""VCP features of BenQ RD series monitors.
+"""VCP features: a standard MCCS set, and the BenQ RD set.
 
-These tables come from Display Pilot 2 for Linux 1.1.4.0. None of them has
-been tried on a monitor yet. See NOTES.md for the source of each table.
+The BenQ tables come from Display Pilot 2 for Linux 1.1.4.0. None of them
+has been tried on a monitor yet. See NOTES.md for the source of each table.
+Monitors that aren't identified as BenQ RD get only the standard set, so
+BenQ's value names are never applied to other monitors.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -31,9 +34,24 @@ PICTURE_MODES: NameTable = frozendict(
     }
 )
 
-# Values for VCP 0x60. Where two names share a value, the first is the one
-# freepilot displays.
-INPUT_SOURCES: NameTable = frozendict(
+# Input source values from the MCCS standard. Vendors define the rest.
+MCCS_INPUTS: NameTable = frozendict(
+    {
+        "d-sub": 0x01,
+        "d-sub2": 0x02,
+        "dvi": 0x03,
+        "dvi2": 0x04,
+        "displayport": 0x0F,
+        "displayport2": 0x10,
+        "hdmi": 0x11,
+        "hdmi1": 0x11,
+        "hdmi2": 0x12,
+    }
+)
+
+# BenQ's values for VCP 0x60. Where two names share a value, the first is the
+# one freepilot displays. BenQ uses 0x13 for USB-C.
+BENQ_INPUTS: NameTable = frozendict(
     {
         "d-sub": 0x01,
         "dvi": 0x03,
@@ -67,7 +85,19 @@ class Feature:
     values_confirmed: bool = True
 
 
-FEATURES: frozendict[str, Feature] = frozendict(
+# Standard MCCS controls, safe to use on any monitor.
+MCCS_FEATURES: frozendict[str, Feature] = frozendict(
+    {
+        "brightness": Feature(0x10, "Brightness, 0-100", "continuous"),
+        "contrast": Feature(0x12, "Contrast, 0-100", "continuous"),
+        "input": Feature(0x60, "Input source", "choice", MCCS_INPUTS),
+        "volume": Feature(0x62, "Speaker volume, 0-100", "continuous"),
+        "sharpness": Feature(0x87, "Sharpness", "continuous"),
+        "mute": Feature(0x8D, "Audio mute", "choice", MUTE_STATES),
+    }
+)
+
+BENQ_RD_FEATURES: frozendict[str, Feature] = frozendict(
     {
         "brightness": Feature(0x10, "Brightness, 0-100", "continuous"),
         "contrast": Feature(0x12, "Contrast, 0-100", "continuous"),
@@ -79,7 +109,7 @@ FEATURES: frozendict[str, Feature] = frozendict(
         "blue-gain": Feature(0x1A, "Blue gain", values_confirmed=False),
         "low-blue-light": Feature(0x19, "Low blue light level", values_confirmed=False),
         "gamut": Feature(0x5F, "Colour gamut", values_confirmed=False),
-        "input": Feature(0x60, "Input source", "choice", INPUT_SOURCES),
+        "input": Feature(0x60, "Input source", "choice", BENQ_INPUTS),
         "volume": Feature(0x62, "Speaker volume, 0-100", "continuous"),
         "gamma": Feature(0x72, "Gamma preset", values_confirmed=False),
         "pip-pbp": Feature(0x7D, "PIP/PBP mode", values_confirmed=False),
@@ -131,16 +161,67 @@ WRITE_DELAYS: frozendict[int, int] = frozendict(
 )
 
 
-FEATURE_NAMES: frozendict[int, str] = frozendict(
-    {feature.code: name for name, feature in FEATURES.items()}
+@dataclass(frozen=True, slots=True)
+class FeatureSet:
+    """The features freepilot uses for one kind of monitor.
+
+    status lists the features freepilot status reads, in order.
+    """
+
+    name: str
+    description: str
+    features: frozendict[str, Feature]
+    status: tuple[str, ...]
+
+    def feature_name(self, code: int) -> str | None:
+        """Return the feature name for a VCP code, if this set has one."""
+        return next(
+            (name for name, feature in self.features.items() if feature.code == code),
+            None,
+        )
+
+    def feature_for(self, code: int) -> Feature | None:
+        """Return the feature for a VCP code, if this set has one."""
+        name = self.feature_name(code)
+        return self.features[name] if name else None
+
+    def values(self, name: str) -> NameTable:
+        """Return a choice feature's value names, or an empty table."""
+        feature = self.features.get(name)
+        return feature.values if feature else frozendict()
+
+
+MCCS = FeatureSet(
+    "mccs",
+    "Standard MCCS controls",
+    MCCS_FEATURES,
+    ("input", "brightness", "contrast", "volume", "mute"),
 )
+BENQ_RD = FeatureSet(
+    "benq-rd",
+    "BenQ RD series",
+    BENQ_RD_FEATURES,
+    ("picture-mode", "input", "brightness", "contrast", "volume", "mute"),
+)
+FEATURE_SETS: frozendict[str, FeatureSet] = frozendict(
+    {feature_set.name: feature_set for feature_set in (BENQ_RD, MCCS)}
+)
+# Matches EDID model names such as "BenQ RD280U" or "RD240Q".
+BENQ_RD_MODEL = re.compile(r"(?:^|\s)RD\d")
+
+
+def identify(manufacturer: str | None, model: str | None) -> FeatureSet:
+    """Pick the feature set for a monitor from its EDID identity.
+
+    This is a heuristic. A BenQ (BNQ) monitor whose model name starts with RD
+    gets the BenQ set. Everything else, including monitors with no EDID, gets
+    the standard set. --model overrides it.
+    """
+    if manufacturer == "BNQ" and model and BENQ_RD_MODEL.search(model):
+        return BENQ_RD
+    return MCCS
 
 
 def name_for(table: NameTable, value: int) -> str | None:
     """Return the first name for a value in a name table, if any."""
     return next((name for name, candidate in table.items() if candidate == value), None)
-
-
-def feature_name(code: int) -> str | None:
-    """Return the feature name for a VCP code, if freepilot knows it."""
-    return FEATURE_NAMES.get(code)

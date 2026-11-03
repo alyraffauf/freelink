@@ -15,10 +15,37 @@ uv run freepilot input usb-c
 uv run freepilot brightness 40
 uv run freepilot get eco-privacy kvm
 uv run freepilot codes
+uv run freepilot capabilities
 ```
 
 You need read-write access to `/dev/i2c-*`. On NixOS, set
 `hardware.i2c.enable = true` and add your user to the `i2c` group.
+
+### BenQ RD and other monitors
+
+freepilot reads each monitor's EDID to decide which names to use:
+
+- A BenQ monitor (`BNQ`) with a model name starting with `RD` gets the full
+  BenQ RD set, including picture modes and BenQ's input values. USB-C is
+  `0x13`.
+- Any other monitor gets standard MCCS controls only: brightness, contrast,
+  input, volume, sharpness, and mute. BenQ names such as `usb-c` and picture
+  modes are refused.
+
+`freepilot codes` shows which set applies. If a monitor is misidentified, or
+selected with `--display` so freepilot can't read its EDID, pass
+`--model benq-rd` or `--model mccs`, or set `model` in its config alias.
+`get` and `set` accept raw codes on any monitor.
+
+### Capabilities
+
+`freepilot capabilities` shows the codes and values the monitor says it
+supports, beside freepilot's names for them. The last line lists features
+freepilot knows that the monitor doesn't list.
+
+Monitors often leave supported codes out, so freepilot sends writes
+whatever the list says. Add `--strict` to refuse writes it doesn't list.
+This fetches the capability string first, which takes about a second.
 
 ### Pick a monitor
 
@@ -47,6 +74,7 @@ Aliases live in `$XDG_CONFIG_HOME/freepilot/config.toml`. Set
 ```toml
 [monitors.desk]
 serial = "ABC123"
+model = "benq-rd" # optional, see above
 
 [monitors.tv]
 connector = "HDMI-A-1"
@@ -63,7 +91,7 @@ connected monitor. `--display` only works with ddcutil.
 ### JSON
 
 Add `--json`, before or after the command, to make `status`, `get`, `codes`,
-and `list` print one line of JSON. Write commands print nothing either way.
+`list`, and `capabilities` print one line of JSON. Write commands print nothing either way.
 The format may still change before v0.1.0.
 
 Each reading looks like this:

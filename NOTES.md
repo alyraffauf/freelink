@@ -21,8 +21,9 @@ monitor yet.
 
 ## First checks on hardware
 
-1. `ddcutil detect`, then `ddcutil capabilities`. Compare the listed codes with
-   `freepilot codes`.
+1. `freepilot list` to check that the EDID identifies the monitor as BenQ
+   RD, then `freepilot capabilities`. Its last line lists BenQ features the
+   monitor doesn't advertise.
 2. `freepilot status`, then change each setting on the OSD and rerun it.
 3. `freepilot mode coding-dark` and `freepilot input usb-c`. Confirm the
    picture-mode and input values.

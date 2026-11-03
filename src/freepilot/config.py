@@ -7,8 +7,9 @@ from pathlib import Path
 lazy from collections.abc import Mapping
 
 from freepilot.errors import FreepilotError
+from freepilot.features import FEATURE_SETS
 
-ALIAS_KEYS = frozenset({"serial", "connector"})
+ALIAS_KEYS = frozenset({"serial", "connector", "model"})
 
 
 class ConfigError(FreepilotError):
@@ -17,10 +18,15 @@ class ConfigError(FreepilotError):
 
 @dataclass(frozen=True, slots=True)
 class Alias:
-    """A name for one monitor. A monitor matches when every given key does."""
+    """A name for one monitor. A monitor matches when serial and connector do.
+
+    model forces a feature set, such as benq-rd, when the EDID is missing or
+    doesn't identify the monitor.
+    """
 
     serial: str | None = None
     connector: str | None = None
+    model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,11 +80,14 @@ def parse_alias(table: object, where: str) -> Alias:
     if unknown := table.keys() - ALIAS_KEYS:
         message = f"{where} has unknown keys: {', '.join(sorted(unknown))}"
         raise ConfigError(message)
-    if not table:
+    if not table.keys() & {"serial", "connector"}:
         message = f"{where} needs serial or connector"
         raise ConfigError(message)
     for key, value in table.items():
         if not isinstance(value, str):
             message = f"{where} {key} must be a string"
             raise ConfigError(message)
+    if (model := table.get("model")) is not None and model not in FEATURE_SETS:
+        message = f"{where} model must be one of {', '.join(FEATURE_SETS)}"
+        raise ConfigError(message)
     return Alias(**table)

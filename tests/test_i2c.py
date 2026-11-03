@@ -17,6 +17,7 @@ from freepilot.i2c import (
     NullReplyError,
     Timing,
     decode_get_reply,
+    encode_capabilities,
     encode_get,
     encode_set,
 )
@@ -259,3 +260,63 @@ def test_open_failures_are_explained(error: OSError, message: str) -> None:
 
     with pytest.raises(I2cError, match=message):
         I2c(4, open_device=open_device).get(0x10)
+
+
+def capabilities_fragment(offset: int, data: bytes) -> bytes:
+    """Build a capabilities reply for a fragment at an offset."""
+    body = bytes(
+        [0x6E, 0x80 | (3 + len(data)), 0xE3, *offset.to_bytes(2, "big"), *data]
+    )
+    total = 0x50
+    for byte in body:
+        total ^= byte
+    return body + bytes([total])
+
+
+def test_capability_request_matches_the_spec() -> None:
+    """The request carries opcode F3 and a big-endian offset."""
+    assert encode_capabilities(0x0120).hex(" ") == "51 83 f3 01 20 6e"
+
+
+def test_capabilities_join_fragments_until_an_empty_one() -> None:
+    """Fragments are joined by offset; an empty fragment ends the string."""
+    log: Log = []
+    text = b"(prot(monitor)type(LCD)model(RD280U)vcp(10 12))"
+    replies: list[bytes | OSError] = [
+        capabilities_fragment(0, text[:32]),
+        NULL,  # retried, not taken as the end
+        capabilities_fragment(32, text[32:]),
+        capabilities_fragment(len(text), b""),
+    ]
+    device = FakeDevice(log, replies)
+    assert transport(device, log).capabilities() == text.decode()
+    writes = [str(entry[1]) for entry in log if entry[0] == "write"]
+    offsets = [write[9:14] for write in writes]
+    assert offsets == ["00 00", "00 20", "00 20", f"00 {len(text):02x}"]
+    assert log.count(("open", 4)) == 1
+
+
+def test_capability_fragment_for_the_wrong_offset_is_rejected() -> None:
+    """A fragment echoing a different offset is malformed, and retried."""
+    log: Log = []
+    device = FakeDevice(log, [capabilities_fragment(5, b"x")] * 4)
+    with pytest.raises(MalformedReplyError, match="asked for capabilities at 0"):
+        transport(device, log).capabilities()
+
+
+def test_capabilities_stop_when_null_persists() -> None:
+    """A fragment that only ever gets the null message is an error."""
+    log: Log = []
+    device = FakeDevice(log, [NULL] * 4)
+    with pytest.raises(I2cError, match="no capabilities fragment at offset 0"):
+        transport(device, log).capabilities()
+
+
+def test_capabilities_are_bounded_in_size() -> None:
+    """A monitor that never sends the empty fragment is cut off."""
+    log: Log = []
+    replies: list[bytes | OSError] = [
+        capabilities_fragment(offset, b"x" * 32) for offset in range(0, 5000, 32)
+    ]
+    with pytest.raises(MalformedReplyError, match="over 4096 bytes"):
+        transport(FakeDevice(log, replies), log).capabilities()
