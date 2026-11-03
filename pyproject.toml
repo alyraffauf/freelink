@@ -1,0 +1,38 @@
+[project]
+name = "freelink"
+version = "0.1.0"
+description = "Control BenQ RD series monitors from Linux over DDC/CI"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE.md"]
+authors = [{ name = "Aly Raffauf", email = "aly@dusklabs.xyz" }]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+freelink = "freelink.cli:main"
+
+[dependency-groups]
+dev = ["pytest", "ruff", "ty"]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812", # conflicts with the formatter
+  "CPY001", # the licence lives in LICENSE.md
+  "D203",   # conflicts with D211
+  "D213",   # conflicts with D212
+  "S603",   # ddcutil runs with fixed arguments
+  "S607",   # ddcutil is found on PATH
+  "T201",   # a CLI prints
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["INP001", "PLR2004", "S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

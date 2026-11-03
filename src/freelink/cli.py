@@ -86,6 +86,9 @@ FEATURES = {
 
 STATUS = ("picture-mode", "input", "brightness", "contrast", "volume", "mute")
 
+MAX_LEVEL = 100
+MUTED, UNMUTED = 1, 2
+
 # Display Pilot 2 waits this long, in milliseconds, after writing these codes.
 WRITE_DELAYS = {0xDC: 500, 0x08: 5000, 0x04: 2000, 0x94: 700, 0xE4: 1000, 0x13: 500}
 
@@ -103,29 +106,32 @@ def parse_terse(output: str) -> dict[int, Reading]:
     """Parse ddcutil --terse getvcp lines into readings keyed by VCP code."""
     readings = {}
     for line in output.splitlines():
-        fields = line.split()
-        if len(fields) < 3 or fields[0] != "VCP":
-            continue
-        code = int(fields[1], 16)
-        kind, values = fields[2], fields[3:]
-        if kind == "C" and len(values) == 2:
-            readings[code] = Reading(code, int(values[0]), int(values[1]))
-        elif kind == "SNC" and len(values) == 1:
-            readings[code] = Reading(code, int(values[0].lstrip("x"), 16))
-        elif kind == "CNC" and len(values) == 4:
-            # mh ml sh sl; the current value is the low word.
-            high, low = (int(value.lstrip("x"), 16) for value in values[2:])
-            readings[code] = Reading(code, high << 8 | low)
-        else:
-            readings[code] = Reading(code, None)
+        match line.split():
+            case ["VCP", code, "C", current, maximum]:
+                reading = Reading(int(code, 16), int(current), int(maximum))
+            case ["VCP", code, "SNC", value]:
+                reading = Reading(int(code, 16), hex_byte(value))
+            case ["VCP", code, "CNC", _, _, high, low]:
+                # mh ml sh sl; the current value is the low word.
+                reading = Reading(int(code, 16), hex_byte(high) << 8 | hex_byte(low))
+            case ["VCP", code, *_]:
+                reading = Reading(int(code, 16), None)
+            case _:
+                continue
+        readings[reading.code] = reading
     return readings
 
 
+def hex_byte(text: str) -> int:
+    """Parse a ddcutil hex byte such as x1f."""
+    return int(text.removeprefix("x"), 16)
+
+
+@dataclass(frozen=True)
 class Monitor:
     """Run ddcutil against one display."""
 
-    def __init__(self, selector: list[str]) -> None:
-        self.selector = selector
+    selector: tuple[str, ...] = ()
 
     def ddcutil(self, *arguments: str) -> str:
         """Run ddcutil and return stdout, raising on failure."""
@@ -168,8 +174,9 @@ def parse_int(text: str) -> int:
 def percent(text: str) -> int:
     """Accept an integer from 0 to 100."""
     value = int(text)
-    if not 0 <= value <= 100:
-        raise argparse.ArgumentTypeError("expected 0-100")
+    if not 0 <= value <= MAX_LEVEL:
+        message = f"expected 0-{MAX_LEVEL}"
+        raise argparse.ArgumentTypeError(message)
     return value
 
 
@@ -189,7 +196,8 @@ def resolve_code(text: str) -> int:
     try:
         return parse_int(text)
     except ValueError:
-        raise argparse.ArgumentTypeError(f"unknown feature {text!r}") from None
+        message = f"unknown feature {text!r}"
+        raise argparse.ArgumentTypeError(message) from None
 
 
 def show_status(monitor: Monitor) -> None:
@@ -203,10 +211,19 @@ def show_status(monitor: Monitor) -> None:
         elif name == "input":
             shown = name_for(INPUT_SOURCES, value)
         elif name == "mute":
-            shown = {1: "on", 2: "off"}.get(value or 0, "unreadable")
+            shown = {MUTED: "on", UNMUTED: "off"}.get(value or 0, "unreadable")
         else:
             shown = format_reading(reading or Reading(0, None))
         print(f"{name:<14} {shown}")
+
+
+def show_readings(monitor: Monitor, codes: list[int]) -> None:
+    """Print each requested feature in the order given."""
+    readings = monitor.get(*codes)
+    for code in codes:
+        names = [name for name, feature in FEATURES.items() if feature.code == code]
+        label = names[0] if names else f"0x{code:02x}"
+        print(f"{label:<24} {format_reading(readings.get(code, Reading(code, None)))}")
 
 
 def list_codes() -> None:
@@ -249,44 +266,43 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    """Run one command."""
+def run(monitor: Monitor, arguments: argparse.Namespace) -> None:
+    """Carry out one monitor command."""
+    match arguments.command:
+        case "status":
+            show_status(monitor)
+        case "mode":
+            monitor.set(FEATURES["picture-mode"].code, PICTURE_MODES[arguments.name])
+        case "input":
+            monitor.set(FEATURES["input"].code, INPUT_SOURCES[arguments.name])
+        case "brightness" | "contrast" | "volume":
+            monitor.set(FEATURES[arguments.command].code, arguments.value)
+        case "mute":
+            state = MUTED if arguments.state == "on" else UNMUTED
+            monitor.set(FEATURES["mute"].code, state)
+        case "get":
+            show_readings(monitor, arguments.features)
+        case "set":
+            monitor.set(arguments.feature, arguments.value)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse the command line and run one command."""
     parser = build_parser()
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     if arguments.command == "codes":
         list_codes()
         return
 
-    selector = []
     if arguments.display:
-        selector = ["--display", arguments.display]
+        monitor = Monitor(("--display", arguments.display))
     elif arguments.bus:
-        selector = ["--bus", arguments.bus]
-    monitor = Monitor(selector)
+        monitor = Monitor(("--bus", arguments.bus))
+    else:
+        monitor = Monitor()
 
     try:
-        match arguments.command:
-            case "status":
-                show_status(monitor)
-            case "mode":
-                monitor.set(
-                    FEATURES["picture-mode"].code, PICTURE_MODES[arguments.name]
-                )
-            case "input":
-                monitor.set(FEATURES["input"].code, INPUT_SOURCES[arguments.name])
-            case "brightness" | "contrast" | "volume":
-                monitor.set(FEATURES[arguments.command].code, arguments.value)
-            case "mute":
-                monitor.set(FEATURES["mute"].code, 1 if arguments.state == "on" else 2)
-            case "get":
-                readings = monitor.get(*arguments.features)
-                for code in arguments.features:
-                    names = [n for n, f in FEATURES.items() if f.code == code]
-                    label = names[0] if names else f"0x{code:02x}"
-                    reading = readings.get(code, Reading(code, None))
-                    print(f"{label:<24} {format_reading(reading)}")
-            case "set":
-                monitor.set(arguments.feature, arguments.value)
+        run(monitor, arguments)
     except FileNotFoundError:
         parser.exit(1, "freelink: ddcutil is not installed\n")
     except RuntimeError as error:
