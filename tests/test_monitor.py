@@ -1,45 +1,13 @@
 """Tests for monitor operations against a fake transport."""
 
-from contextlib import contextmanager
-lazy from collections.abc import Callable, Generator
+lazy from collections.abc import Callable
 
 import pytest
+from conftest import FakeTransport
 
 from freepilot import monitor
 from freepilot.monitor import Monitor
 from freepilot.vcp import Reading
-
-
-class FakeTransport:
-    """Answer reads from a fixed table and record writes."""
-
-    def __init__(self, readings: dict[int, Reading] | None = None) -> None:
-        """Store the readings that get returns."""
-        self.readings = readings or {}
-        self.writes: list[tuple[int, int]] = []
-        self.log: list[str] = []
-
-    @contextmanager
-    def session(self) -> Generator[None]:
-        """Record when the session opens and closes."""
-        self.log.append("open")
-        try:
-            yield
-        finally:
-            self.log.append("close")
-
-    def get(self, *codes: int) -> dict[int, Reading]:
-        """Return the stored readings for the requested codes."""
-        return {code: self.readings[code] for code in codes if code in self.readings}
-
-    def set(self, code: int, value: int) -> None:
-        """Record the write."""
-        self.writes.append((code, value))
-        self.log.append(f"set 0x{code:02x}")
-
-    def capabilities(self) -> str:
-        """Return a short capability string."""
-        return "(vcp(10 60(0F 11)))"
 
 
 def test_status_keeps_raw_readings_by_name() -> None:

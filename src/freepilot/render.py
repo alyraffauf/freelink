@@ -5,7 +5,9 @@ lazy from collections.abc import Mapping, Sequence
 
 from freepilot.features import Feature, FeatureSet, name_for
 lazy from freepilot.capabilities import Capabilities
+lazy from freepilot.config import Profile
 lazy from freepilot.displays import Display
+lazy from freepilot.profiles import LAST, NAMED_ORDER
 lazy from freepilot.vcp import Reading
 
 type JsonObject = dict[str, object]
@@ -190,5 +192,38 @@ def capabilities_output(capabilities: Capabilities, features: FeatureSet) -> Out
             "vcp": entries,
             "unlisted": unlisted,
             "raw": capabilities.raw,
+        },
+    )
+
+
+def profiles_output(profiles: Mapping[str, Profile]) -> Output:
+    """List profile names and the monitor each targets."""
+    lines = [
+        f"{name:<18} {f'monitor {profile.monitor}' if profile.monitor else ''}".rstrip()
+        for name, profile in profiles.items()
+    ]
+    data = [
+        {"name": name, "monitor": profile.monitor} for name, profile in profiles.items()
+    ]
+    return Output(lines=lines or ["no profiles in config.toml"], data=data)
+
+
+def profile_output(name: str, profile: Profile) -> Output:
+    """Show a profile's settings in the order apply writes them."""
+    named = [key for key in NAMED_ORDER if key in profile.settings]
+    last = [key for key in LAST if key in profile.settings]
+    vcp = sorted(profile.vcp.items())
+    header = f"{name} (monitor {profile.monitor})" if profile.monitor else name
+    lines = [header]
+    lines += [f"  {key} = {profile.settings[key]}" for key in named]
+    lines += [f"  vcp 0x{code:02x} = {value}" for code, value in vcp]
+    lines += [f"  {key} = {profile.settings[key]}" for key in last]
+    return Output(
+        lines=lines,
+        data={
+            "name": name,
+            "monitor": profile.monitor,
+            "settings": {key: profile.settings[key] for key in [*named, *last]},
+            "vcp": {f"0x{code:02x}": value for code, value in vcp},
         },
     )

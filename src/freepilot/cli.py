@@ -2,6 +2,7 @@
 
 import argparse
 import json
+from dataclasses import replace
 from typing import NoReturn
 
 from freepilot.errors import FreepilotError
@@ -19,19 +20,27 @@ from freepilot.render import (
     capabilities_output,
     codes_output,
     displays_output,
+    profile_output,
+    profiles_output,
     readings_output,
     status_output,
 )
 
 # Only monitor commands need a transport, so --help skips loading them.
-lazy from freepilot import displays, targets
+lazy from freepilot import displays, profiles, targets
 lazy from freepilot.capabilities import (
     Capabilities,
     CapabilityError,
     parse_capabilities,
     write_problem,
 )
-lazy from freepilot.config import Config, config_path, load_config
+lazy from freepilot.config import (
+    Config,
+    ConfigError,
+    Profile,
+    config_path,
+    load_config,
+)
 lazy from freepilot.features import FeatureSet
 lazy from freepilot.monitor import Monitor, WriteCheck
 lazy from freepilot.vcp import Transport
@@ -139,13 +148,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     set_.add_argument("feature", type=resolve_code)
     set_.add_argument("value", type=parse_int)
+
+    profile = commands.add_parser(
+        "profile", help="List, show, apply, or save profiles in config.toml"
+    )
+    actions = profile.add_subparsers(dest="action", required=True)
+    actions.add_parser("list", parents=[output], help="List profiles")
+    for action, help_text, parents in (
+        ("show", "Show a profile's settings in apply order", [output]),
+        ("apply", "Apply a profile", []),
+        ("save", "Print the current settings as a profile to paste", []),
+    ):
+        actions.add_parser(action, parents=parents, help=help_text).add_argument("name")
     return parser
 
 
-def run(monitor: Monitor, arguments: argparse.Namespace) -> Output | None:
+def run(
+    monitor: Monitor, arguments: argparse.Namespace, config: Config
+) -> Output | None:
     """Carry out one monitor command. Read commands return what to show."""
     features = monitor.features
     match arguments.command:
+        case "profile":
+            run_profile(monitor, arguments, config)
         case "status":
             return status_output(monitor.status(), features)
         case "capabilities":
@@ -164,6 +189,19 @@ def run(monitor: Monitor, arguments: argparse.Namespace) -> Output | None:
         case "set":
             monitor.write(arguments.feature, arguments.value)
     return None
+
+
+def run_profile(
+    monitor: Monitor, arguments: argparse.Namespace, config: Config
+) -> None:
+    """Apply a profile, or print the current settings as one."""
+    if arguments.action == "apply":
+        profile = find_profile(config, arguments.name)
+        profiles.apply(monitor, profiles.plan(profile, monitor))
+    else:
+        # save prints TOML to paste into config.toml, even with --json.
+        status = monitor.status()
+        print(profiles.save(arguments.name, status, monitor.features), end="")
 
 
 def show(output: Output, *, as_json: bool) -> None:
@@ -207,14 +245,47 @@ def dispatch(arguments: argparse.Namespace) -> Output | None:
         transport=arguments.transport,
         model=arguments.model,
     )
-    # Only --monitor needs the config, so a broken config can't stop the rest.
-    config = load_config(config_path()) if selection.monitor else Config()
+    # Only --monitor and profiles need the config, so a broken config can't
+    # stop anything else.
+    needs_config = selection.monitor or arguments.command == "profile"
+    config = load_config(config_path()) if needs_config else Config()
+    if arguments.command == "profile":
+        match arguments.action:
+            case "list":
+                return profiles_output(config.profiles)
+            case "show":
+                return profile_output(
+                    arguments.name, find_profile(config, arguments.name)
+                )
+            case "apply":
+                selection = profile_selection(
+                    selection, find_profile(config, arguments.name)
+                )
     target = targets.resolve(selection, connected, config.monitors)
     if arguments.command == "codes":
         return codes_output(target.features)
     transport = targets.connect(selection, target)
     check = strict_check(transport, target.features) if arguments.strict else None
-    return run(Monitor(transport, target.features, check), arguments)
+    return run(Monitor(transport, target.features, check), arguments, config)
+
+
+def find_profile(config: Config, name: str) -> Profile:
+    """Look up a profile by name, listing the others when it is missing."""
+    if name not in config.profiles:
+        known = ", ".join(config.profiles) or "none"
+        message = f"no profile named {name!r} in {config_path()}; profiles: {known}"
+        raise ConfigError(message)
+    return config.profiles[name]
+
+
+def profile_selection(
+    selection: targets.Selection, profile: Profile
+) -> targets.Selection:
+    """Use the profile's monitor when the command line names none."""
+    named = (selection.display_number, selection.bus, selection.monitor)
+    if profile.monitor is None or any(option is not None for option in named):
+        return selection
+    return replace(selection, monitor=profile.monitor)
 
 
 def strict_check(transport: Transport, features: FeatureSet) -> WriteCheck:

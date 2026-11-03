@@ -49,3 +49,43 @@ def test_bad_config_names_the_problem(tmp_path: Path, text: str, message: str) -
     path.write_text(text)
     with pytest.raises(ConfigError, match=message):
         load_config(path)
+
+
+def test_profiles_load(tmp_path: Path) -> None:
+    """[profiles.NAME] tables become profiles with named and raw settings."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[profiles.coding]\nmonitor = "desk"\npicture-mode = "coding-dark"\n'
+        'brightness = 40\n\n[profiles.coding.vcp]\n"0xd1" = 2\n'
+    )
+    profile = load_config(path).profiles["coding"]
+    assert profile.monitor == "desk"
+    assert profile.settings == {"picture-mode": "coding-dark", "brightness": 40}
+    assert profile.vcp == {0xD1: 2}
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("[profiles.p]\nsparkle = 1", "unknown key: sparkle"),
+        ("[profiles.p]\nbrightness = true", "brightness must be an integer"),
+        ("[profiles.p]\nbrightness = 101", "brightness is outside 0-100"),
+        ("[profiles.p]\ninput = 17", "input must be a string"),
+        ("[profiles.p]\nmonitor = 1\nbrightness = 1", "monitor must be a string"),
+        ("[profiles.p]", "sets nothing"),
+        ('[profiles.p.vcp]\n"0xdc" = 1', "can't set 0xdc"),
+        ('[profiles.p.vcp]\n"0x60" = 1', "use the input key"),
+        ('[profiles.p.vcp]\n"kvm" = 1', "is not a number"),
+        ('[profiles.p.vcp]\n"0x100" = 1', "outside 0-0xff"),
+        ('[profiles.p.vcp]\n"0xd1" = 70000', "outside 0-65535"),
+        ('[profiles.p]\nbrightness = 4\n[profiles.p.vcp]\n"0x10" = 5', "both by name"),
+    ],
+)
+def test_bad_profiles_are_refused_before_anything_runs(
+    tmp_path: Path, text: str, message: str
+) -> None:
+    """Profiles are checked when the config loads."""
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    with pytest.raises(ConfigError, match=message):
+        load_config(path)

@@ -80,6 +80,44 @@ model = "benq-rd" # optional, see above
 connector = "HDMI-A-1"
 ```
 
+### Profiles
+
+Profiles apply several settings at once. Add them to `config.toml`:
+
+```toml
+[profiles.coding]
+monitor = "desk" # optional; --monitor, --bus, or --display override it
+picture-mode = "coding-dark"
+brightness = 40
+contrast = 50
+
+[profiles.coding.vcp] # raw codes, as hex strings
+"0xd1" = 2
+```
+
+```sh
+freepilot profile list
+freepilot profile show coding
+freepilot profile apply coding
+freepilot profile save evening >> ~/.config/freepilot/config.toml
+```
+
+The named keys are `picture-mode`, `input`, `brightness`, `contrast`,
+`sharpness`, `volume`, and `mute`. `apply` writes picture mode first,
+because changing it resets levels on most monitors. Then come levels, mute,
+and raw codes in ascending order. Input goes last, because it may switch the
+monitor away from this machine.
+
+freepilot checks the whole profile before writing anything. Raw codes can't
+set picture mode, input, power, KVM, or the reset codes. Use the named keys
+for picture mode and input. If a write fails, freepilot stops and lists what
+was sent and what was never tried. The monitor doesn't confirm writes, and
+nothing is rolled back.
+
+`save` prints the current settings as a profile table. Unreadable values
+become comments, and so does input, so applying a saved profile doesn't
+switch inputs unless you uncomment it.
+
 ### Talk to the bus directly
 
 `--transport i2c` skips ddcutil and speaks DDC/CI on `/dev/i2c-N` itself.
@@ -91,8 +129,9 @@ connected monitor. `--display` only works with ddcutil.
 ### JSON
 
 Add `--json`, before or after the command, to make `status`, `get`, `codes`,
-`list`, and `capabilities` print one line of JSON. Write commands print nothing either way.
-The format may still change before v0.1.0.
+`list`, `capabilities`, `profile list`, and `profile show` print one line of
+JSON. Write commands print nothing either way, and `profile save` always
+prints TOML. The format may still change before v0.1.0.
 
 Each reading looks like this:
 

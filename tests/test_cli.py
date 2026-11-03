@@ -409,3 +409,77 @@ def test_codes_shows_the_benq_set_for_benq_monitors(
     """The fake BenQ RD280U is identified, so codes shows the BenQ set."""
     cli.main(["codes"])
     assert capsys.readouterr().out.splitlines()[0] == "BenQ RD series (benq-rd)"
+
+
+PROFILES = """\
+[monitors.desk]
+serial = "ABC123"
+
+[profiles.coding]
+monitor = "desk"
+picture-mode = "coding-dark"
+brightness = 40
+
+[profiles.loud]
+volume = 80
+"""
+
+
+def test_profile_list_and_show(sysfs: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """List names profiles; show prints settings in apply order."""
+    (sysfs / "config.toml").write_text(PROFILES)
+    cli.main(["profile", "list"])
+    assert capsys.readouterr().out.splitlines() == [
+        "coding             monitor desk",
+        "loud",
+    ]
+    cli.main(["profile", "show", "coding", "--json"])
+    assert json.loads(capsys.readouterr().out) == {
+        "name": "coding",
+        "monitor": "desk",
+        "settings": {"picture-mode": "coding-dark", "brightness": 40},
+        "vcp": {},
+    }
+
+
+def test_profile_apply_uses_the_profile_monitor(sysfs: Path, fake_run: FakeRun) -> None:
+    """Apply resolves the profile's monitor and writes in order."""
+    (sysfs / "config.toml").write_text(PROFILES)
+    cli.main(["profile", "apply", "coding"])
+    assert fake_run.calls == [
+        ["ddcutil", "--bus", "4", "setvcp", "0xdc", "48"],
+        ["ddcutil", "--bus", "4", "setvcp", "0x10", "40"],
+    ]
+
+
+def test_command_line_selector_overrides_the_profile_monitor(
+    sysfs: Path, fake_run: FakeRun
+) -> None:
+    """--bus wins over the profile's monitor."""
+    (sysfs / "config.toml").write_text(PROFILES)
+    cli.main(["--bus", "9", "profile", "apply", "loud"])
+    assert fake_run.calls == [["ddcutil", "--bus", "9", "setvcp", "0x62", "80"]]
+
+
+def test_profile_save_prints_toml(
+    fake_run: FakeRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Save reads the status and prints a table to paste."""
+    cli.main(["profile", "save", "now"])
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "[profiles.now]"
+    assert 'picture-mode = "coding-light"' in lines
+    assert "brightness = 42" in lines
+    assert '# input = "usb-c"' in lines
+    assert fake_run.calls[0][1] == "getvcp"
+
+
+@pytest.mark.usefixtures("fake_run")
+def test_missing_profile_lists_the_others(
+    sysfs: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unknown profile name is an error naming the known ones."""
+    (sysfs / "config.toml").write_text(PROFILES)
+    with pytest.raises(SystemExit):
+        cli.main(["profile", "apply", "nope"])
+    assert "profiles: coding, loud" in capsys.readouterr().err

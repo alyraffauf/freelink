@@ -1,11 +1,14 @@
 """Shared fixtures: a fake ddcutil and no write delays."""
 
 import subprocess
+from contextlib import contextmanager
+lazy from collections.abc import Generator
 lazy from pathlib import Path
 
 import pytest
 
 from freepilot import ddcutil, displays, i2c, monitor
+lazy from freepilot.vcp import Reading
 
 TERSE = """\
 VCP dc SNC x31
@@ -200,3 +203,35 @@ def sysfs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(displays, "DRM_ROOT", root)
     monkeypatch.setenv("FREEPILOT_CONFIG", str(tmp_path / "config.toml"))
     return tmp_path
+
+
+class FakeTransport:
+    """Answer reads from a fixed table and record writes."""
+
+    def __init__(self, readings: dict[int, Reading] | None = None) -> None:
+        """Store the readings that get returns."""
+        self.readings = readings or {}
+        self.writes: list[tuple[int, int]] = []
+        self.log: list[str] = []
+
+    @contextmanager
+    def session(self) -> Generator[None]:
+        """Record when the session opens and closes."""
+        self.log.append("open")
+        try:
+            yield
+        finally:
+            self.log.append("close")
+
+    def get(self, *codes: int) -> dict[int, Reading]:
+        """Return the stored readings for the requested codes."""
+        return {code: self.readings[code] for code in codes if code in self.readings}
+
+    def set(self, code: int, value: int) -> None:
+        """Record the write."""
+        self.writes.append((code, value))
+        self.log.append(f"set 0x{code:02x}")
+
+    def capabilities(self) -> str:
+        """Return a short capability string."""
+        return "(vcp(10 60(0F 11)))"
