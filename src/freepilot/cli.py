@@ -1,6 +1,8 @@
 """Control BenQ RD series monitors over DDC/CI through ddcutil."""
 
 import argparse
+import json
+from typing import NoReturn
 
 from freepilot.features import (
     FEATURES,
@@ -8,15 +10,13 @@ from freepilot.features import (
     MAX_LEVEL,
     MUTE_STATES,
     PICTURE_MODES,
-    Feature,
-    feature_name,
-    name_for,
 )
+from freepilot.render import Output, codes_output, readings_output, status_output
 
 # Only monitor commands need ddcutil, so codes and --help skip loading it.
 lazy from freepilot.ddcutil import Ddcutil
 lazy from freepilot.monitor import Monitor
-lazy from freepilot.vcp import Reading, TransportError
+lazy from freepilot.vcp import TransportError
 
 
 def parse_int(text: str) -> int:
@@ -44,57 +44,26 @@ def resolve_code(text: str) -> int:
         raise argparse.ArgumentTypeError(message) from None
 
 
-def format_reading(reading: Reading | None) -> str:
-    """Show a reading the way its feature's kind calls for.
-
-    Codes freepilot does not know show as the transport reported them:
-    current/max when it gave a maximum, otherwise hex.
-    """
-    if reading is None or reading.value is None:
-        return "unreadable"
-    name = feature_name(reading.code)
-    match FEATURES[name] if name else None:
-        case Feature(kind="choice", values=values):
-            return name_for(values, reading.value) or f"0x{reading.value:02x}"
-        case Feature(kind="continuous") | None if reading.maximum is not None:
-            return f"{reading.value}/{reading.maximum}"
-        case Feature(kind="continuous"):
-            return str(reading.value)
-        case _:
-            return f"0x{reading.value:02x}"
-
-
-def show_status(monitor: Monitor) -> None:
-    """Print the common settings."""
-    for name, reading in monitor.status().items():
-        print(f"{name:<14} {format_reading(reading)}")
-
-
-def show_readings(monitor: Monitor, codes: list[int]) -> None:
-    """Print each requested feature in the order given."""
-    readings = monitor.read(*codes)
-    for code in codes:
-        label = feature_name(code) or f"0x{code:02x}"
-        print(f"{label:<24} {format_reading(readings.get(code))}")
-
-
-def list_codes() -> None:
-    """Print every VCP code freepilot knows about."""
-    for name, feature in sorted(FEATURES.items(), key=lambda item: item[1].code):
-        marker = "" if feature.values_confirmed else "  (values unconfirmed)"
-        print(f"0x{feature.code:02x}  {name:<24} {feature.description}{marker}")
-
-
 def build_parser() -> argparse.ArgumentParser:
     """Define the command line."""
+    # --json works before or after the command. Subcommands default it to
+    # SUPPRESS so they don't reset a --json given before the command.
+    json_help = "Print JSON for read commands, and errors as JSON on stderr"
+    output = argparse.ArgumentParser(add_help=False)
+    output.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help=json_help
+    )
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", action="store_true", help=json_help)
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--display", help="ddcutil display number")
     target.add_argument("--bus", help="I2C bus number, as in /dev/i2c-N")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    commands.add_parser("status", help="Show picture mode, input, and levels")
-    commands.add_parser("codes", help="List known VCP codes")
+    commands.add_parser(
+        "status", parents=[output], help="Show picture mode, input, and levels"
+    )
+    commands.add_parser("codes", parents=[output], help="List known VCP codes")
 
     mode = commands.add_parser("mode", help="Set the picture mode")
     mode.add_argument("name", choices=PICTURE_MODES)
@@ -111,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     get = commands.add_parser(
         "get",
+        parents=[output],
         help="Read features by name or by decimal or 0x VCP code; see 'codes'",
     )
     get.add_argument("features", nargs="+", type=resolve_code)
@@ -123,11 +93,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run(monitor: Monitor, arguments: argparse.Namespace) -> None:
-    """Carry out one monitor command."""
+def run(monitor: Monitor, arguments: argparse.Namespace) -> Output | None:
+    """Carry out one monitor command. Read commands return what to show."""
     match arguments.command:
         case "status":
-            show_status(monitor)
+            return status_output(monitor.status())
+        case "get":
+            return readings_output(
+                arguments.features, monitor.read(*arguments.features)
+            )
         case "mode":
             monitor.set_picture_mode(arguments.name)
         case "input":
@@ -136,10 +110,24 @@ def run(monitor: Monitor, arguments: argparse.Namespace) -> None:
             monitor.set_level(arguments.command, arguments.value)
         case "mute":
             monitor.set_muted(muted=arguments.state == "on")
-        case "get":
-            show_readings(monitor, arguments.features)
         case "set":
             monitor.write(arguments.feature, arguments.value)
+    return None
+
+
+def show(output: Output, *, as_json: bool) -> None:
+    """Print a read command's result as text lines or one line of JSON."""
+    if as_json:
+        print(json.dumps(output.data))
+    else:
+        print("\n".join(output.lines))
+
+
+def fail(parser: argparse.ArgumentParser, message: str, *, as_json: bool) -> NoReturn:
+    """Exit 1 with an error on stderr, as JSON when --json was given."""
+    if as_json:
+        parser.exit(1, json.dumps({"level": "error", "message": message}) + "\n")
+    parser.exit(1, f"freepilot: {message}\n")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -147,7 +135,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     if arguments.command == "codes":
-        list_codes()
+        show(codes_output(), as_json=arguments.json)
         return
 
     if arguments.display:
@@ -158,9 +146,11 @@ def main(argv: list[str] | None = None) -> None:
         transport = Ddcutil()
 
     try:
-        run(Monitor(transport), arguments)
+        output = run(Monitor(transport), arguments)
     except TransportError as error:
-        parser.exit(1, f"freepilot: {error}\n")
+        fail(parser, str(error), as_json=arguments.json)
+    if output is not None:
+        show(output, as_json=arguments.json)
 
 
 if __name__ == "__main__":

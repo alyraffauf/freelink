@@ -1,12 +1,12 @@
 """End-to-end tests for the freepilot command line."""
 
 import argparse
+import json
 
 import pytest
 from conftest import FakeRun
 
 from freepilot import cli, ddcutil
-from freepilot.vcp import Reading
 
 
 @pytest.mark.parametrize(("text", "code"), [("brightness", 0x10), ("0xdc", 0xDC)])
@@ -100,28 +100,7 @@ def test_ddcutil_problems_exit_cleanly(
     assert message in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-    ("reading", "shown"),
-    [
-        (Reading(0x60, 0x13), "usb-c"),
-        (Reading(0x60, 0x42), "0x42"),
-        (Reading(0x8D, 1), "on"),
-        (Reading(0x10, 42, 100), "42/100"),
-        (Reading(0x10, 42), "42"),
-        (Reading(0xE4, 2, 3), "0x02"),
-        (Reading(0x42, 5, 10), "5/10"),
-        (Reading(0x42, 5), "0x05"),
-        (Reading(0x10, None), "unreadable"),
-        (None, "unreadable"),
-    ],
-)
-def test_format_reading_follows_the_feature_kind(
-    reading: Reading | None, shown: str
-) -> None:
-    """Choices show by name, levels as current/max, raw and unknown codes in hex."""
-    assert cli.format_reading(reading) == shown
-
-
+@pytest.mark.usefixtures("fake_run")
 def test_unrelated_errors_keep_their_traceback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -130,6 +109,64 @@ def test_unrelated_errors_keep_their_traceback(
     def broken(*_: object, **__: object) -> None:
         raise RuntimeError
 
-    monkeypatch.setattr(cli, "show_status", broken)
+    monkeypatch.setattr(cli, "status_output", broken)
     with pytest.raises(RuntimeError):
         cli.main(["status"])
+
+
+def test_json_works_before_or_after_the_command(
+    fake_run: FakeRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--json is accepted in either position and prints one JSON document."""
+    cli.main(["--json", "status"])
+    before = json.loads(capsys.readouterr().out)
+    cli.main(["status", "--json"])
+    after = json.loads(capsys.readouterr().out)
+    assert before == after
+    assert before["input"] == {
+        "code": 0x60,
+        "name": "input",
+        "kind": "choice",
+        "value": 0x13,
+        "label": "usb-c",
+    }
+    assert before["brightness"]["max"] == 100
+    assert len(fake_run.calls) == 2
+
+
+def test_json_get_keeps_request_order_and_unreadable_codes(
+    fake_run: FakeRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Get --json lists readings in request order, with null for no answer."""
+    cli.main(["--json", "get", "kvm", "brightness", "kvm"])
+    readings = json.loads(capsys.readouterr().out)
+    assert [reading["name"] for reading in readings] == ["kvm", "brightness", "kvm"]
+    assert readings[0]["value"] is None
+    assert fake_run.calls[0][-3:] == ["0xe4", "0x10", "0xe4"]
+
+
+def test_json_errors_go_to_stderr_as_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With --json, a monitor error is a JSON object on stderr and exit 1."""
+    monkeypatch.setattr(ddcutil.subprocess, "run", FakeRun(returncode=1))
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["status", "--json"])
+    assert exit_info.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "level": "error",
+        "message": "Display not found",
+    }
+
+
+def test_json_codes_lists_kinds_and_values(capsys: pytest.CaptureFixture[str]) -> None:
+    """Codes --json describes each feature, including its value names."""
+    cli.main(["codes", "--json"])
+    features = {
+        feature["name"]: feature for feature in json.loads(capsys.readouterr().out)
+    }
+    assert features["mute"]["values"] == {"on": 1, "off": 2}
+    assert features["kvm"]["kind"] == "raw"
+    assert features["kvm"]["values_confirmed"] is False

@@ -21,6 +21,34 @@ Pick a monitor with `--display N` or `--bus N`. You need read-write access to
 `/dev/i2c-*`. On NixOS, set `hardware.i2c.enable = true` and add your user to
 the `i2c` group.
 
+### JSON
+
+Add `--json`, before or after the command, to make `status`, `get`, and
+`codes` print one line of JSON. Write commands print nothing either way. The
+format may still change before v0.1.0.
+
+Each reading looks like this:
+
+```json
+{ "code": 96, "name": "input", "kind": "choice", "value": 19, "label": "usb-c" }
+```
+
+- `kind` is `continuous`, `choice`, `raw`, or `unknown` for codes freepilot
+  doesn't know.
+- `value` is `null` when the monitor didn't answer.
+- `label` names a known choice value.
+- `max` appears for continuous features, and for unknown codes when ddcutil
+  reported one.
+
+`status` prints an object keyed by feature name. `get` prints a list in the
+order you asked. `codes` lists each feature with its kind and value names.
+Errors go to stderr as `{"level": "error", "message": "..."}`, with exit
+status 1.
+
+```sh
+freepilot --json status | jq -r '.brightness.value'
+```
+
 ## Nix
 
 Run it from the flake:
