@@ -134,6 +134,30 @@ def test_ddcutil_failure_exits_cleanly(
     assert "freelink: Display not found" in capsys.readouterr().err
 
 
+def test_malformed_output_exits_cleanly(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Output in a known shape with bad numbers exits 1 and quotes the line."""
+    monkeypatch.setattr(cli.subprocess, "run", FakeDdcutil("VCP 10 C abc 100\n"))
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["status"])
+    assert exit_info.value.code == 1
+    assert "unexpected ddcutil output: 'VCP 10 C abc 100'" in capsys.readouterr().err
+
+
+def test_unrelated_errors_are_not_reported_as_monitor_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bugs outside ddcutil keep their traceback."""
+
+    def broken(*_: object, **__: object) -> None:
+        raise RuntimeError
+
+    monkeypatch.setattr(cli, "show_status", broken)
+    with pytest.raises(RuntimeError):
+        cli.main(["status"])
+
+
 def test_missing_ddcutil_exits_cleanly(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

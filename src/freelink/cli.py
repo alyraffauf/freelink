@@ -93,6 +93,10 @@ MUTED, UNMUTED = 1, 2
 WRITE_DELAYS = {0xDC: 500, 0x08: 5000, 0x04: 2000, 0x94: 700, 0xE4: 1000, 0x13: 500}
 
 
+class DdcutilError(Exception):
+    """ddcutil is missing, failed, or printed output freelink cannot parse."""
+
+
 @dataclass(frozen=True)
 class Reading:
     """One parsed ddcutil reading."""
@@ -106,20 +110,30 @@ def parse_terse(output: str) -> dict[int, Reading]:
     """Parse ddcutil --terse getvcp lines into readings keyed by VCP code."""
     readings = {}
     for line in output.splitlines():
-        match line.split():
-            case ["VCP", code, "C", current, maximum]:
-                reading = Reading(int(code, 16), int(current), int(maximum))
-            case ["VCP", code, "SNC", value]:
-                reading = Reading(int(code, 16), hex_byte(value))
-            case ["VCP", code, "CNC", _, _, high, low]:
-                # mh ml sh sl; the current value is the low word.
-                reading = Reading(int(code, 16), hex_byte(high) << 8 | hex_byte(low))
-            case ["VCP", code, *_]:
-                reading = Reading(int(code, 16), None)
-            case _:
-                continue
-        readings[reading.code] = reading
+        try:
+            reading = parse_terse_line(line)
+        except ValueError as error:
+            message = f"unexpected ddcutil output: {line!r}"
+            raise DdcutilError(message) from error
+        if reading is not None:
+            readings[reading.code] = reading
     return readings
+
+
+def parse_terse_line(line: str) -> Reading | None:
+    """Parse one --terse line, or return None for lines that are not readings."""
+    match line.split():
+        case ["VCP", code, "C", current, maximum]:
+            return Reading(int(code, 16), int(current), int(maximum))
+        case ["VCP", code, "SNC", value]:
+            return Reading(int(code, 16), hex_byte(value))
+        case ["VCP", code, "CNC", _, _, high, low]:
+            # mh ml sh sl; the current value is the low word.
+            return Reading(int(code, 16), hex_byte(high) << 8 | hex_byte(low))
+        case ["VCP", code, *_]:
+            return Reading(int(code, 16), None)
+        case _:
+            return None
 
 
 def hex_byte(text: str) -> int:
@@ -135,15 +149,19 @@ class Monitor:
 
     def ddcutil(self, *arguments: str) -> str:
         """Run ddcutil and return stdout, raising on failure."""
-        result = subprocess.run(
-            ["ddcutil", *self.selector, *arguments],
-            check=False,
-            text=True,
-            capture_output=True,
-        )
+        try:
+            result = subprocess.run(
+                ["ddcutil", *self.selector, *arguments],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+        except FileNotFoundError:
+            message = "ddcutil is not installed"
+            raise DdcutilError(message) from None
         if result.returncode != 0:
             message = (result.stderr or result.stdout).strip()
-            raise RuntimeError(message or f"ddcutil exited with {result.returncode}")
+            raise DdcutilError(message or f"ddcutil exited with {result.returncode}")
         return result.stdout
 
     def get(self, *codes: int) -> dict[int, Reading]:
@@ -180,9 +198,9 @@ def percent(text: str) -> int:
     return value
 
 
-def format_reading(reading: Reading) -> str:
+def format_reading(reading: Reading | None) -> str:
     """Show continuous values as current/max and the rest in hex."""
-    if reading.value is None:
+    if reading is None or reading.value is None:
         return "unreadable"
     if reading.maximum is not None:
         return f"{reading.value}/{reading.maximum}"
@@ -213,7 +231,7 @@ def show_status(monitor: Monitor) -> None:
         elif name == "mute":
             shown = {MUTED: "on", UNMUTED: "off"}.get(value or 0, "unreadable")
         else:
-            shown = format_reading(reading or Reading(0, None))
+            shown = format_reading(reading)
         print(f"{name:<14} {shown}")
 
 
@@ -223,7 +241,7 @@ def show_readings(monitor: Monitor, codes: list[int]) -> None:
     for code in codes:
         names = [name for name, feature in FEATURES.items() if feature.code == code]
         label = names[0] if names else f"0x{code:02x}"
-        print(f"{label:<24} {format_reading(readings.get(code, Reading(code, None)))}")
+        print(f"{label:<24} {format_reading(readings.get(code))}")
 
 
 def list_codes() -> None:
@@ -303,9 +321,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         run(monitor, arguments)
-    except FileNotFoundError:
-        parser.exit(1, "freelink: ddcutil is not installed\n")
-    except RuntimeError as error:
+    except DdcutilError as error:
         parser.exit(1, f"freelink: {error}\n")
 
 
