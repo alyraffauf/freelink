@@ -5,11 +5,11 @@ _: {
         pkgs.ddcutil
         pkgs.git
         pkgs.nixd
-        pkgs.python3
+        pkgs.python315
         pkgs.uv
       ];
       env = {
-        UV_PYTHON = pkgs.python3.interpreter;
+        UV_PYTHON = pkgs.python315.interpreter;
         UV_PYTHON_DOWNLOADS = "never";
       };
     };

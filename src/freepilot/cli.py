@@ -2,7 +2,6 @@
 
 import argparse
 
-from freepilot.ddcutil import Ddcutil, DdcutilError, Reading
 from freepilot.features import (
     FEATURES,
     INPUT_SOURCES,
@@ -10,7 +9,10 @@ from freepilot.features import (
     PICTURE_MODES,
     feature_name,
 )
-from freepilot.monitor import Monitor
+
+# Only monitor commands need ddcutil, so codes and --help skip loading it.
+lazy from freepilot.ddcutil import Ddcutil, DdcutilError, Reading
+lazy from freepilot.monitor import Monitor
 
 
 def parse_int(text: str) -> int:

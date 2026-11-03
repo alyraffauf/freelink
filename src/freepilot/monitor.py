@@ -4,7 +4,6 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from freepilot.ddcutil import Reading
 from freepilot.features import (
     FEATURES,
     INPUT_SOURCES,
@@ -12,8 +11,10 @@ from freepilot.features import (
     PICTURE_MODES,
     UNMUTED,
     WRITE_DELAYS,
+    NameTable,
     name_for,
 )
+lazy from freepilot.ddcutil import Reading
 
 
 class Transport(Protocol):
@@ -28,7 +29,7 @@ class Transport(Protocol):
         ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Status:
     """The common settings. None means the monitor did not answer.
 
@@ -44,14 +45,14 @@ class Status:
     muted: bool | None
 
 
-def decode_choice(table: dict[str, int], reading: Reading | None) -> str | None:
+def decode_choice(table: NameTable, reading: Reading | None) -> str | None:
     """Name a reading's value from a name table, or show it in hex."""
     if reading is None or reading.value is None:
         return None
     return name_for(table, reading.value) or f"0x{reading.value:02x}"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Monitor:
     """A BenQ RD series monitor reached through a transport."""
 

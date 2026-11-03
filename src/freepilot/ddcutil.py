@@ -8,7 +8,7 @@ class DdcutilError(Exception):
     """ddcutil is missing, failed, or printed output that does not parse."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Reading:
     """One VCP reading. value is None when the monitor did not answer."""
 
@@ -53,7 +53,7 @@ def hex_byte(text: str) -> int:
     return int(text.removeprefix("x"), 16)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Ddcutil:
     """Run ddcutil against one display.
 

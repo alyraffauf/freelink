@@ -1,6 +1,6 @@
 """Tests for monitor operations against a fake transport."""
 
-from collections.abc import Callable
+lazy from collections.abc import Callable
 
 import pytest
 

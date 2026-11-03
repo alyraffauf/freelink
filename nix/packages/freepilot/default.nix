@@ -10,7 +10,7 @@
   }: let
     workspace = inputs.uv2nix.lib.workspace.loadWorkspace {workspaceRoot = ../../..;};
     pythonSet =
-      (pkgs.callPackage inputs.pyproject-nix.build.packages {python = pkgs.python3;}).overrideScope
+      (pkgs.callPackage inputs.pyproject-nix.build.packages {python = pkgs.python315;}).overrideScope
       (lib.composeManyExtensions [
         inputs.pyproject-build-systems.overlays.wheel
         (workspace.mkPyprojectOverlay {sourcePreference = "wheel";})

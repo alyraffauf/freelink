@@ -2,7 +2,7 @@
 
 Control BenQ RD series monitors from Linux over DDC/CI, without Display Pilot 2.
 
-freepilot needs Python 3.12 and `ddcutil`, and has no other runtime
+freepilot needs Python 3.15 and `ddcutil`, and has no other runtime
 dependencies. It has not been tested on a monitor yet. See
 [NOTES.md](NOTES.md) for where the VCP map comes from and what to check first.
 
