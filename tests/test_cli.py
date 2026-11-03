@@ -2,11 +2,12 @@
 
 import argparse
 import json
+lazy from pathlib import Path
 
 import pytest
-from conftest import FakeRun
+from conftest import FakeRun, make_connector, make_edid
 
-from freepilot import cli, ddcutil
+from freepilot import cli, ddcutil, displays
 
 
 @pytest.mark.parametrize(("text", "code"), [("brightness", 0x10), ("0xdc", 0xDC)])
@@ -170,3 +171,58 @@ def test_json_codes_lists_kinds_and_values(capsys: pytest.CaptureFixture[str]) -
     assert features["mute"]["values"] == {"on": 1, "off": 2}
     assert features["kvm"]["kind"] == "raw"
     assert features["kvm"]["values_confirmed"] is False
+
+
+@pytest.fixture
+def fake_sysfs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point discovery at a fake sysfs with one BenQ on bus 4, and no config."""
+    root = tmp_path / "drm"
+    edid = make_edid(texts={0xFC: b"BenQ RD280U\n", 0xFF: b"ABC123\n"})
+    make_connector(root, "card1-DP-1", edid=edid, ddc_bus=4)
+    make_connector(root, "card1-HDMI-A-1")
+    monkeypatch.setattr(displays, "DRM_ROOT", root)
+    monkeypatch.setenv("FREEPILOT_CONFIG", str(tmp_path / "config.toml"))
+    return tmp_path
+
+
+@pytest.mark.usefixtures("fake_sysfs")
+def test_list_shows_connected_monitors(capsys: pytest.CaptureFixture[str]) -> None:
+    """List shows each monitor's connector, bus, and identity."""
+    cli.main(["list"])
+    assert capsys.readouterr().out.splitlines() == [
+        "card1-DP-1         i2c-4    BNQ BenQ RD280U  serial ABC123",
+        "card1-HDMI-A-1     no bus   ??? unknown model",
+    ]
+    cli.main(["list", "--json"])
+    first = json.loads(capsys.readouterr().out)[0]
+    assert first["bus"] == 4
+    assert first["serial"] == "ABC123"
+
+
+@pytest.mark.usefixtures("fake_sysfs")
+def test_monitor_resolves_to_a_ddcutil_bus(fake_run: FakeRun) -> None:
+    """--monitor finds the bus itself and passes it to ddcutil."""
+    cli.main(["--monitor", "rd280u", "brightness", "40"])
+    assert fake_run.calls == [["ddcutil", "--bus", "4", "setvcp", "0x10", "40"]]
+
+
+def test_monitor_uses_config_aliases(fake_sysfs: Path, fake_run: FakeRun) -> None:
+    """A config alias names a monitor by serial."""
+    (fake_sysfs / "config.toml").write_text('[monitors.desk]\nserial = "ABC123"\n')
+    cli.main(["--monitor", "desk", "volume", "5"])
+    assert fake_run.calls[0][:3] == ["ddcutil", "--bus", "4"]
+
+
+@pytest.mark.usefixtures("fake_sysfs", "fake_run")
+@pytest.mark.parametrize(
+    ("selector", "message"),
+    [("HDMI-A-1", "has no DDC bus"), ("nope", "no monitor matches")],
+)
+def test_monitor_problems_exit_cleanly(
+    capsys: pytest.CaptureFixture[str], selector: str, message: str
+) -> None:
+    """Selection failures exit 1 with a message."""
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["--monitor", selector, "status"])
+    assert exit_info.value.code == 1
+    assert message in capsys.readouterr().err

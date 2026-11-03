@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from typing import Protocol
 lazy from contextlib import AbstractContextManager
 
+from freepilot.errors import FreepilotError
 
-class TransportError(Exception):
+
+class TransportError(FreepilotError):
     """The monitor could not be reached, or its answer could not be used."""
 
 

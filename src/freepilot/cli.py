@@ -4,6 +4,7 @@ import argparse
 import json
 from typing import NoReturn
 
+from freepilot.errors import FreepilotError
 from freepilot.features import (
     FEATURES,
     INPUT_SOURCES,
@@ -11,12 +12,20 @@ from freepilot.features import (
     MUTE_STATES,
     PICTURE_MODES,
 )
-from freepilot.render import Output, codes_output, readings_output, status_output
+from freepilot.render import (
+    Output,
+    codes_output,
+    displays_output,
+    readings_output,
+    status_output,
+)
 
 # Only monitor commands need ddcutil, so codes and --help skip loading it.
+lazy from freepilot import displays
+lazy from freepilot.config import config_path, load_config
 lazy from freepilot.ddcutil import Ddcutil
+lazy from freepilot.displays import SelectionError, select_display
 lazy from freepilot.monitor import Monitor
-lazy from freepilot.vcp import TransportError
 
 
 def parse_int(text: str) -> int:
@@ -58,7 +67,13 @@ def build_parser() -> argparse.ArgumentParser:
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--display", help="ddcutil display number")
     target.add_argument("--bus", help="I2C bus number, as in /dev/i2c-N")
+    target.add_argument(
+        "--monitor",
+        help="Config alias, serial, connector (DP-1), or part of the model name",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    commands.add_parser("list", parents=[output], help="List connected monitors")
 
     commands.add_parser(
         "status", parents=[output], help="Show picture mode, input, and levels"
@@ -134,23 +149,43 @@ def main(argv: list[str] | None = None) -> None:
     """Parse the command line and run one command."""
     parser = build_parser()
     arguments = parser.parse_args(argv)
-    if arguments.command == "codes":
-        show(codes_output(), as_json=arguments.json)
-        return
-
-    if arguments.display:
-        transport = Ddcutil(("--display", arguments.display))
-    elif arguments.bus:
-        transport = Ddcutil(("--bus", arguments.bus))
-    else:
-        transport = Ddcutil()
-
     try:
-        output = run(Monitor(transport), arguments)
-    except TransportError as error:
+        output = dispatch(arguments)
+    except FreepilotError as error:
         fail(parser, str(error), as_json=arguments.json)
     if output is not None:
         show(output, as_json=arguments.json)
+
+
+def dispatch(arguments: argparse.Namespace) -> Output | None:
+    """Run commands that need no monitor directly, the rest through one."""
+    match arguments.command:
+        case "codes":
+            return codes_output()
+        case "list":
+            return displays_output(displays.find_displays())
+        case _:
+            return run(Monitor(connect(arguments)), arguments)
+
+
+def connect(arguments: argparse.Namespace) -> Ddcutil:
+    """Build the transport for the monitor the options name.
+
+    With --monitor, freepilot finds the monitor itself and hands ddcutil its
+    bus, so every transport picks the same monitor.
+    """
+    if arguments.display:
+        return Ddcutil(("--display", arguments.display))
+    if arguments.bus:
+        return Ddcutil(("--bus", arguments.bus))
+    if arguments.monitor:
+        aliases = load_config(config_path()).monitors
+        display = select_display(displays.find_displays(), arguments.monitor, aliases)
+        if display.bus is None:
+            message = f"{display.describe()} has no DDC bus in sysfs; try --bus"
+            raise SelectionError(message)
+        return Ddcutil(("--bus", str(display.bus)))
+    return Ddcutil()
 
 
 if __name__ == "__main__":

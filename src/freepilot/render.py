@@ -4,6 +4,7 @@ from dataclasses import dataclass
 lazy from collections.abc import Mapping, Sequence
 
 from freepilot.features import FEATURES, Feature, feature_name, name_for
+lazy from freepilot.displays import Display
 lazy from freepilot.vcp import Reading
 
 type JsonObject = dict[str, object]
@@ -109,3 +110,32 @@ def codes_output() -> Output:
         for name, feature in features
     ]
     return Output(lines=lines, data=data)
+
+
+def displays_output(displays: Sequence[Display]) -> Output:
+    """List connected monitors with their bus and identity."""
+    lines = []
+    data = []
+    for display in displays:
+        edid = display.edid
+        bus = f"i2c-{display.bus}" if display.bus is not None else "no bus"
+        model = edid.model if edid and edid.model else "unknown model"
+        serial = (edid.serial or edid.serial_number) if edid else None
+        maker = edid.manufacturer if edid else "???"
+        lines.append(
+            f"{display.connector:<18} {bus:<8} {maker} {model}"
+            + (f"  serial {serial}" if serial else "")
+        )
+        data.append(
+            {
+                "connector": display.connector,
+                "bus": display.bus,
+                "buses": list(display.buses),
+                "manufacturer": edid.manufacturer if edid else None,
+                "product": edid.product if edid else None,
+                "model": edid.model if edid else None,
+                "serial": edid.serial if edid else None,
+                "serial_number": edid.serial_number if edid else None,
+            }
+        )
+    return Output(lines=lines or ["no connected monitors found"], data=data)

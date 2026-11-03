@@ -17,15 +17,46 @@ uv run freepilot get eco-privacy kvm
 uv run freepilot codes
 ```
 
-Pick a monitor with `--display N` or `--bus N`. You need read-write access to
-`/dev/i2c-*`. On NixOS, set `hardware.i2c.enable = true` and add your user to
-the `i2c` group.
+You need read-write access to `/dev/i2c-*`. On NixOS, set
+`hardware.i2c.enable = true` and add your user to the `i2c` group.
+
+### Pick a monitor
+
+`freepilot list` shows connected monitors, read from sysfs. It needs no
+i2c access.
+
+```console
+$ freepilot list
+card1-DP-1         i2c-4    BNQ BenQ RD280U  serial ABC123
+```
+
+Pass `--monitor` with any of these, checked in this order:
+
+1. A config alias.
+2. The serial.
+3. The connector name: `card1-DP-1`, or `DP-1`.
+4. Part of the model name.
+
+The first rule that matches anything decides. If it matches several
+monitors, freepilot stops and lists them. `--bus N` and `--display N` still
+work. Without any of them, ddcutil picks its default display.
+
+Aliases live in `$XDG_CONFIG_HOME/freepilot/config.toml`. Set
+`$FREEPILOT_CONFIG` to use another file.
+
+```toml
+[monitors.desk]
+serial = "ABC123"
+
+[monitors.tv]
+connector = "HDMI-A-1"
+```
 
 ### JSON
 
-Add `--json`, before or after the command, to make `status`, `get`, and
-`codes` print one line of JSON. Write commands print nothing either way. The
-format may still change before v0.1.0.
+Add `--json`, before or after the command, to make `status`, `get`, `codes`,
+and `list` print one line of JSON. Write commands print nothing either way.
+The format may still change before v0.1.0.
 
 Each reading looks like this:
 
