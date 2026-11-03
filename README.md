@@ -21,7 +21,21 @@ Pick a monitor with `--display N` or `--bus N`. You need read-write access to
 `/dev/i2c-*`. On NixOS, set `hardware.i2c.enable = true` and add your user to
 the `i2c` group.
 
+## Nix
+
+Run it from the flake:
+
+```sh
+nix run github:alyraffauf/freelink -- status
+```
+
+Or add the flake input and install `packages.${system}.freelink`. The package
+wraps `ddcutil` onto `PATH`. It builds for `x86_64-linux` and `aarch64-linux`.
+
 ## Development
+
+`nix develop` provides Python, uv, and `ddcutil`. `nix flake check` runs
+formatting, `ty`, and the tests.
 
 ```sh
 uv sync
