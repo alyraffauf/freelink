@@ -1,5 +1,5 @@
 [project]
-name = "freelink"
+name = "freepilot"
 version = "0.1.0"
 description = "Control BenQ RD series monitors from Linux over DDC/CI"
 readme = "README.md"
@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.scripts]
-freelink = "freelink.cli:main"
+freepilot = "freepilot.cli:main"
 
 [dependency-groups]
 dev = ["pytest", "ruff", "ty"]

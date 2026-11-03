@@ -2,15 +2,15 @@
 
 import argparse
 
-from freelink.ddcutil import Ddcutil, DdcutilError, Reading
-from freelink.features import (
+from freepilot.ddcutil import Ddcutil, DdcutilError, Reading
+from freepilot.features import (
     FEATURES,
     INPUT_SOURCES,
     MAX_LEVEL,
     PICTURE_MODES,
     feature_name,
 )
-from freelink.monitor import Monitor
+from freepilot.monitor import Monitor
 
 
 def parse_int(text: str) -> int:
@@ -34,7 +34,7 @@ def resolve_code(text: str) -> int:
     try:
         return parse_int(text)
     except ValueError:
-        message = f"unknown feature {text!r}; run 'freelink codes' for names"
+        message = f"unknown feature {text!r}; run 'freepilot codes' for names"
         raise argparse.ArgumentTypeError(message) from None
 
 
@@ -71,7 +71,7 @@ def show_readings(monitor: Monitor, codes: list[int]) -> None:
 
 
 def list_codes() -> None:
-    """Print every VCP code freelink knows about."""
+    """Print every VCP code freepilot knows about."""
     for name, feature in sorted(FEATURES.items(), key=lambda item: item[1].code):
         marker = "" if feature.values_confirmed else "  (values unconfirmed)"
         print(f"0x{feature.code:02x}  {name:<24} {feature.description}{marker}")
@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         run(Monitor(transport), arguments)
     except DdcutilError as error:
-        parser.exit(1, f"freelink: {error}\n")
+        parser.exit(1, f"freepilot: {error}\n")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ PICTURE_MODES = {
 }
 
 # Values for VCP 0x60. Where two names share a value, the first is the one
-# freelink displays.
+# freepilot displays.
 INPUT_SOURCES = {
     "d-sub": 0x01,
     "dvi": 0x03,
@@ -112,7 +112,7 @@ def name_for(table: dict[str, int], value: int) -> str | None:
 
 
 def feature_name(code: int) -> str | None:
-    """Return the feature name for a VCP code, if freelink knows it."""
+    """Return the feature name for a VCP code, if freepilot knows it."""
     return next(
         (name for name, feature in FEATURES.items() if feature.code == code), None
     )

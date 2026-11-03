@@ -1,11 +1,11 @@
-"""Monitor operations, independent of how freelink talks to the monitor."""
+"""Monitor operations, independent of how freepilot talks to the monitor."""
 
 import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from freelink.ddcutil import Reading
-from freelink.features import (
+from freepilot.ddcutil import Reading
+from freepilot.features import (
     FEATURES,
     INPUT_SOURCES,
     MUTED,
@@ -17,7 +17,7 @@ from freelink.features import (
 
 
 class Transport(Protocol):
-    """Reads and writes raw VCP codes. freelink.ddcutil.Ddcutil is one."""
+    """Reads and writes raw VCP codes. freepilot.ddcutil.Ddcutil is one."""
 
     def get(self, *codes: int) -> dict[int, Reading]:
         """Read one or more VCP codes."""
@@ -33,7 +33,7 @@ class Status:
     """The common settings. None means the monitor did not answer.
 
     picture_mode and input_source hold a name, or the raw value in hex when
-    freelink does not know it.
+    freepilot does not know it.
     """
 
     picture_mode: str | None

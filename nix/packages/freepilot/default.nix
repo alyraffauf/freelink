@@ -15,36 +15,36 @@
         inputs.pyproject-build-systems.overlays.wheel
         (workspace.mkPyprojectOverlay {sourcePreference = "wheel";})
       ]);
-    venv = pythonSet.mkVirtualEnv "freelink-env" workspace.deps.default;
-    devVenv = pythonSet.mkVirtualEnv "freelink-dev-env" workspace.deps.all;
+    venv = pythonSet.mkVirtualEnv "freepilot-env" workspace.deps.default;
+    devVenv = pythonSet.mkVirtualEnv "freepilot-dev-env" workspace.deps.all;
   in {
     packages = {
-      default = config.packages.freelink;
+      default = config.packages.freepilot;
 
-      freelink =
-        pkgs.runCommand "freelink-${pythonSet.freelink.version}" {
+      freepilot =
+        pkgs.runCommand "freepilot-${pythonSet.freepilot.version}" {
           nativeBuildInputs = [pkgs.makeWrapper];
           meta = {
             description = "Control BenQ RD series monitors from Linux over DDC/CI";
-            homepage = "https://github.com/alyraffauf/freelink";
+            homepage = "https://github.com/alyraffauf/freepilot";
             license = lib.licenses.mit;
             platforms = lib.platforms.linux;
-            mainProgram = "freelink";
+            mainProgram = "freepilot";
           };
         } ''
-          makeWrapper ${venv}/bin/freelink "$out/bin/freelink" \
+          makeWrapper ${venv}/bin/freepilot "$out/bin/freepilot" \
             --prefix PATH : ${lib.makeBinPath [pkgs.ddcutil]}
         '';
     };
 
     checks = {
-      freelink-pytest = pkgs.runCommand "freelink-pytest" {nativeBuildInputs = [devVenv];} ''
+      freepilot-pytest = pkgs.runCommand "freepilot-pytest" {nativeBuildInputs = [devVenv];} ''
         cd ${../../..}
         pytest -p no:cacheprovider
         touch "$out"
       '';
 
-      freelink-ty = pkgs.runCommand "freelink-ty" {nativeBuildInputs = [devVenv];} ''
+      freepilot-ty = pkgs.runCommand "freepilot-ty" {nativeBuildInputs = [devVenv];} ''
         cd ${../../..}
         ty check --python ${devVenv}/bin/python
         touch "$out"

@@ -1,11 +1,11 @@
-"""End-to-end tests for the freelink command line."""
+"""End-to-end tests for the freepilot command line."""
 
 import argparse
 
 import pytest
 from conftest import FakeRun
 
-from freelink import cli, ddcutil
+from freepilot import cli, ddcutil
 
 
 @pytest.mark.parametrize(("text", "code"), [("brightness", 0x10), ("0xdc", 0xDC)])
@@ -16,7 +16,7 @@ def test_resolve_code_accepts_names_and_numbers(text: str, code: int) -> None:
 
 def test_resolve_code_rejects_unknown_names() -> None:
     """An unknown name is an argument error that points to 'codes'."""
-    with pytest.raises(argparse.ArgumentTypeError, match="freelink codes"):
+    with pytest.raises(argparse.ArgumentTypeError, match="freepilot codes"):
         cli.resolve_code("sparkle")
 
 
@@ -81,7 +81,7 @@ def test_get_prints_in_request_order(
 @pytest.mark.parametrize(
     ("fake", "message"),
     [
-        (FakeRun(returncode=1), "freelink: Display not found"),
+        (FakeRun(returncode=1), "freepilot: Display not found"),
         (FakeRun("VCP 10 C abc 100\n"), "unexpected ddcutil output"),
     ],
 )

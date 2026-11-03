@@ -1,20 +1,20 @@
-# freelink
+# freepilot
 
 Control BenQ RD series monitors from Linux over DDC/CI, without Display Pilot 2.
 
-freelink needs Python 3.12 and `ddcutil`, and has no other runtime
+freepilot needs Python 3.12 and `ddcutil`, and has no other runtime
 dependencies. It has not been tested on a monitor yet. See
 [NOTES.md](NOTES.md) for where the VCP map comes from and what to check first.
 
 ## Usage
 
 ```sh
-uv run freelink status
-uv run freelink mode coding-dark
-uv run freelink input usb-c
-uv run freelink brightness 40
-uv run freelink get eco-privacy kvm
-uv run freelink codes
+uv run freepilot status
+uv run freepilot mode coding-dark
+uv run freepilot input usb-c
+uv run freepilot brightness 40
+uv run freepilot get eco-privacy kvm
+uv run freepilot codes
 ```
 
 Pick a monitor with `--display N` or `--bus N`. You need read-write access to
@@ -26,10 +26,10 @@ the `i2c` group.
 Run it from the flake:
 
 ```sh
-nix run github:alyraffauf/freelink -- status
+nix run github:alyraffauf/freepilot -- status
 ```
 
-Or add the flake input and install `packages.${system}.freelink`. The package
+Or add the flake input and install `packages.${system}.freepilot`. The package
 wraps `ddcutil` onto `PATH`. It builds for `x86_64-linux` and `aarch64-linux`.
 
 ## Development

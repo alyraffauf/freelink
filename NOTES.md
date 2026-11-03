@@ -1,6 +1,6 @@
-# freelink notes
+# freepilot notes
 
-freelink drives BenQ RD series monitors through `ddcutil`. The VCP map
+freepilot drives BenQ RD series monitors through `ddcutil`. The VCP map
 comes from Display Pilot 2 for Linux 1.1.4.0. None of it has been tried on a
 monitor yet.
 
@@ -22,11 +22,11 @@ monitor yet.
 ## First checks on hardware
 
 1. `ddcutil detect`, then `ddcutil capabilities`. Compare the listed codes with
-   `freelink codes`.
-2. `freelink status`, then change each setting on the OSD and rerun it.
-3. `freelink mode coding-dark` and `freelink input usb-c`. Confirm the
+   `freepilot codes`.
+2. `freepilot status`, then change each setting on the OSD and rerun it.
+3. `freepilot mode coding-dark` and `freepilot input usb-c`. Confirm the
    picture-mode and input values.
-4. For each unconfirmed feature, read it with `freelink get <name>`, change it
+4. For each unconfirmed feature, read it with `freepilot get <name>`, change it
    on the OSD, and read it again to learn its values.
 
 ## Open questions

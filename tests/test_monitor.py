@@ -4,9 +4,9 @@ from collections.abc import Callable
 
 import pytest
 
-from freelink import monitor
-from freelink.ddcutil import Reading
-from freelink.monitor import Monitor, Status
+from freepilot import monitor
+from freepilot.ddcutil import Reading
+from freepilot.monitor import Monitor, Status
 
 
 class FakeTransport:

@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from freelink import ddcutil, monitor
+from freepilot import ddcutil, monitor
 
 TERSE = """\
 VCP dc SNC x31
