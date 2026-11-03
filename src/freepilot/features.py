@@ -5,8 +5,13 @@ been tried on a monitor yet. See NOTES.md for the source of each table.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
 type NameTable = frozendict[str, int]
+
+# How to show a value: continuous as current/max, choice by name from the
+# feature's value table, raw in hex.
+type FeatureKind = Literal["continuous", "choice", "raw"]
 
 # Picture modes write (SHCode << 8) | Code to VCP 0xDC, using the Code and
 # SHCode attributes from each model's RDxxxx.xml. Every RD model uses SHCode
@@ -44,8 +49,9 @@ INPUT_SOURCES: NameTable = frozendict(
     }
 )
 
+MUTE_STATES: NameTable = frozendict({"on": 1, "off": 2})
+
 MAX_LEVEL = 100
-MUTED, UNMUTED = 1, 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,14 +60,17 @@ class Feature:
 
     code: int
     description: str
+    kind: FeatureKind = "raw"
+    # Names for a choice feature's values.
+    values: NameTable = frozendict()
     # False when the code is confirmed but what its values mean is not.
     values_confirmed: bool = True
 
 
 FEATURES: frozendict[str, Feature] = frozendict(
     {
-        "brightness": Feature(0x10, "Brightness, 0-100"),
-        "contrast": Feature(0x12, "Contrast, 0-100"),
+        "brightness": Feature(0x10, "Brightness, 0-100", "continuous"),
+        "contrast": Feature(0x12, "Contrast, 0-100", "continuous"),
         "color-temperature": Feature(
             0x14, "Colour temperature preset", values_confirmed=False
         ),
@@ -70,15 +79,15 @@ FEATURES: frozendict[str, Feature] = frozendict(
         "blue-gain": Feature(0x1A, "Blue gain", values_confirmed=False),
         "low-blue-light": Feature(0x19, "Low blue light level", values_confirmed=False),
         "gamut": Feature(0x5F, "Colour gamut", values_confirmed=False),
-        "input": Feature(0x60, "Input source"),
-        "volume": Feature(0x62, "Speaker volume, 0-100"),
+        "input": Feature(0x60, "Input source", "choice", INPUT_SOURCES),
+        "volume": Feature(0x62, "Speaker volume, 0-100", "continuous"),
         "gamma": Feature(0x72, "Gamma preset", values_confirmed=False),
         "pip-pbp": Feature(0x7D, "PIP/PBP mode", values_confirmed=False),
         "bright-intelligence": Feature(
             0x81, "Bright Intelligence Plus", values_confirmed=False
         ),
-        "sharpness": Feature(0x87, "Sharpness"),
-        "mute": Feature(0x8D, "Audio mute, 1 muted, 2 unmuted"),
+        "sharpness": Feature(0x87, "Sharpness", "continuous"),
+        "mute": Feature(0x8D, "Audio mute", "choice", MUTE_STATES),
         "audio-mode": Feature(0x94, "Audio mode", values_confirmed=False),
         "auto-pivot": Feature(0xAA, "Auto pivot status", values_confirmed=False),
         "night-protection-level": Feature(
@@ -90,7 +99,7 @@ FEATURES: frozendict[str, Feature] = frozendict(
         "power-mode": Feature(0xD6, "Power mode"),
         "backlight": Feature(0xD7, "Backlight switch", values_confirmed=False),
         "backlight-level": Feature(0xD9, "Backlight level", values_confirmed=False),
-        "picture-mode": Feature(0xDC, "Picture mode"),
+        "picture-mode": Feature(0xDC, "Picture mode", "choice", PICTURE_MODES),
         "bi-sensor": Feature(
             0xE2, "Bright Intelligence sensor", values_confirmed=False
         ),
@@ -122,6 +131,11 @@ WRITE_DELAYS: frozendict[int, int] = frozendict(
 )
 
 
+FEATURE_NAMES: frozendict[int, str] = frozendict(
+    {feature.code: name for name, feature in FEATURES.items()}
+)
+
+
 def name_for(table: NameTable, value: int) -> str | None:
     """Return the first name for a value in a name table, if any."""
     return next((name for name, candidate in table.items() if candidate == value), None)
@@ -129,6 +143,4 @@ def name_for(table: NameTable, value: int) -> str | None:
 
 def feature_name(code: int) -> str | None:
     """Return the feature name for a VCP code, if freepilot knows it."""
-    return next(
-        (name for name, feature in FEATURES.items() if feature.code == code), None
-    )
+    return FEATURE_NAMES.get(code)

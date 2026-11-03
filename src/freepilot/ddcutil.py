@@ -1,20 +1,14 @@
 """Read and write VCP codes by running ddcutil."""
 
 import subprocess
+from contextlib import nullcontext
 from dataclasses import dataclass
 
+from freepilot.vcp import Reading, TransportError
 
-class DdcutilError(Exception):
+
+class DdcutilError(TransportError):
     """ddcutil is missing, failed, or printed output that does not parse."""
-
-
-@dataclass(frozen=True, slots=True)
-class Reading:
-    """One VCP reading. value is None when the monitor did not answer."""
-
-    code: int
-    value: int | None
-    maximum: int | None = None
 
 
 def parse_terse(output: str) -> dict[int, Reading]:
@@ -62,6 +56,13 @@ class Ddcutil:
     """
 
     selector: tuple[str, ...] = ()
+
+    def session(self) -> nullcontext[None]:
+        """Do nothing: ddcutil locks the bus itself on every call.
+
+        Holding a lock here would make freepilot's own ddcutil calls wait on it.
+        """
+        return nullcontext()
 
     def run(self, *arguments: str) -> str:
         """Run ddcutil and return its stdout."""

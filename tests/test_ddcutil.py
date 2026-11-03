@@ -4,7 +4,8 @@ import pytest
 from conftest import TERSE, FakeRun
 
 from freepilot import ddcutil
-from freepilot.ddcutil import Ddcutil, DdcutilError, Reading
+from freepilot.ddcutil import Ddcutil, DdcutilError
+from freepilot.vcp import Reading
 
 
 def test_parse_terse_handles_c_snc_cnc_and_errors() -> None:

@@ -6,6 +6,7 @@ import pytest
 from conftest import FakeRun
 
 from freepilot import cli, ddcutil
+from freepilot.vcp import Reading
 
 
 @pytest.mark.parametrize(("text", "code"), [("brightness", 0x10), ("0xdc", 0xDC)])
@@ -97,6 +98,28 @@ def test_ddcutil_problems_exit_cleanly(
         cli.main(["status"])
     assert exit_info.value.code == 1
     assert message in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("reading", "shown"),
+    [
+        (Reading(0x60, 0x13), "usb-c"),
+        (Reading(0x60, 0x42), "0x42"),
+        (Reading(0x8D, 1), "on"),
+        (Reading(0x10, 42, 100), "42/100"),
+        (Reading(0x10, 42), "42"),
+        (Reading(0xE4, 2, 3), "0x02"),
+        (Reading(0x42, 5, 10), "5/10"),
+        (Reading(0x42, 5), "0x05"),
+        (Reading(0x10, None), "unreadable"),
+        (None, "unreadable"),
+    ],
+)
+def test_format_reading_follows_the_feature_kind(
+    reading: Reading | None, shown: str
+) -> None:
+    """Choices show by name, levels as current/max, raw and unknown codes in hex."""
+    assert cli.format_reading(reading) == shown
 
 
 def test_unrelated_errors_keep_their_traceback(

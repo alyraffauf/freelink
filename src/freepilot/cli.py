@@ -6,13 +6,17 @@ from freepilot.features import (
     FEATURES,
     INPUT_SOURCES,
     MAX_LEVEL,
+    MUTE_STATES,
     PICTURE_MODES,
+    Feature,
     feature_name,
+    name_for,
 )
 
 # Only monitor commands need ddcutil, so codes and --help skip loading it.
-lazy from freepilot.ddcutil import Ddcutil, DdcutilError, Reading
+lazy from freepilot.ddcutil import Ddcutil
 lazy from freepilot.monitor import Monitor
+lazy from freepilot.vcp import Reading, TransportError
 
 
 def parse_int(text: str) -> int:
@@ -41,27 +45,29 @@ def resolve_code(text: str) -> int:
 
 
 def format_reading(reading: Reading | None) -> str:
-    """Show continuous values as current/max and the rest in hex."""
+    """Show a reading the way its feature's kind calls for.
+
+    Codes freepilot does not know show as the transport reported them:
+    current/max when it gave a maximum, otherwise hex.
+    """
     if reading is None or reading.value is None:
         return "unreadable"
-    if reading.maximum is not None:
-        return f"{reading.value}/{reading.maximum}"
-    return f"0x{reading.value:02x}"
+    name = feature_name(reading.code)
+    match FEATURES[name] if name else None:
+        case Feature(kind="choice", values=values):
+            return name_for(values, reading.value) or f"0x{reading.value:02x}"
+        case Feature(kind="continuous") | None if reading.maximum is not None:
+            return f"{reading.value}/{reading.maximum}"
+        case Feature(kind="continuous"):
+            return str(reading.value)
+        case _:
+            return f"0x{reading.value:02x}"
 
 
 def show_status(monitor: Monitor) -> None:
     """Print the common settings."""
-    status = monitor.status()
-    rows = {
-        "picture-mode": status.picture_mode or "unreadable",
-        "input": status.input_source or "unreadable",
-        "brightness": format_reading(status.brightness),
-        "contrast": format_reading(status.contrast),
-        "volume": format_reading(status.volume),
-        "mute": {True: "on", False: "off", None: "unreadable"}[status.muted],
-    }
-    for name, shown in rows.items():
-        print(f"{name:<14} {shown}")
+    for name, reading in monitor.status().items():
+        print(f"{name:<14} {format_reading(reading)}")
 
 
 def show_readings(monitor: Monitor, codes: list[int]) -> None:
@@ -101,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
         level.add_argument("value", type=percent, metavar="0-100")
 
     mute = commands.add_parser("mute", help="Mute or unmute the speakers")
-    mute.add_argument("state", choices=("on", "off"))
+    mute.add_argument("state", choices=MUTE_STATES)
 
     get = commands.add_parser(
         "get",
@@ -153,7 +159,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         run(Monitor(transport), arguments)
-    except DdcutilError as error:
+    except TransportError as error:
         parser.exit(1, f"freepilot: {error}\n")
 
 

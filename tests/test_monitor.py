@@ -1,12 +1,13 @@
 """Tests for monitor operations against a fake transport."""
 
-lazy from collections.abc import Callable
+from contextlib import contextmanager
+lazy from collections.abc import Callable, Generator
 
 import pytest
 
 from freepilot import monitor
-from freepilot.ddcutil import Reading
-from freepilot.monitor import Monitor, Status
+from freepilot.monitor import Monitor
+from freepilot.vcp import Reading
 
 
 class FakeTransport:
@@ -16,6 +17,16 @@ class FakeTransport:
         """Store the readings that get returns."""
         self.readings = readings or {}
         self.writes: list[tuple[int, int]] = []
+        self.log: list[str] = []
+
+    @contextmanager
+    def session(self) -> Generator[None]:
+        """Record when the session opens and closes."""
+        self.log.append("open")
+        try:
+            yield
+        finally:
+            self.log.append("close")
 
     def get(self, *codes: int) -> dict[int, Reading]:
         """Return the stored readings for the requested codes."""
@@ -24,34 +35,26 @@ class FakeTransport:
     def set(self, code: int, value: int) -> None:
         """Record the write."""
         self.writes.append((code, value))
+        self.log.append(f"set 0x{code:02x}")
 
 
-def test_status_decodes_names_and_mute() -> None:
-    """Status names the picture mode and input and decodes mute."""
+def test_status_keeps_raw_readings_by_name() -> None:
+    """Status returns every status feature's raw reading, None when missing."""
     transport = FakeTransport(
         {
-            0xDC: Reading(0xDC, 0x31),
-            0x60: Reading(0x60, 0x11),
+            0xDC: Reading(0xDC, 0x99),
             0x10: Reading(0x10, 42, 100),
-            0x8D: Reading(0x8D, 1),
+            0x8D: Reading(0x8D, 7),
         }
     )
-    assert Monitor(transport).status() == Status(
-        picture_mode="coding-light",
-        input_source="hdmi",
-        brightness=Reading(0x10, 42, 100),
-        contrast=None,
-        volume=None,
-        muted=True,
-    )
-
-
-def test_status_shows_unknown_values_in_hex() -> None:
-    """A value missing from the name table comes back as hex."""
-    transport = FakeTransport({0xDC: Reading(0xDC, 0x99), 0x8D: Reading(0x8D, 7)})
-    status = Monitor(transport).status()
-    assert status.picture_mode == "0x99"
-    assert status.muted is None
+    assert Monitor(transport).status() == {
+        "picture-mode": Reading(0xDC, 0x99),
+        "input": None,
+        "brightness": Reading(0x10, 42, 100),
+        "contrast": None,
+        "volume": None,
+        "mute": Reading(0x8D, 7),
+    }
 
 
 @pytest.mark.parametrize(
@@ -80,3 +83,11 @@ def test_write_waits_like_display_pilot(monkeypatch: pytest.MonkeyPatch) -> None
     target.set_picture_mode("srgb")
     target.set_level("brightness", 10)
     assert sleeps == [0.5, 0.0]
+
+
+def test_write_settles_inside_the_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The post-write wait happens before the session closes."""
+    transport = FakeTransport()
+    monkeypatch.setattr(monitor.time, "sleep", lambda _: transport.log.append("wait"))
+    Monitor(transport).set_picture_mode("srgb")
+    assert transport.log == ["open", "set 0xdc", "wait", "close"]
