@@ -1,0 +1,31 @@
+[package]
+name = "freepilot"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Control monitors over DDC/CI with a CLI and GPUI desktop app"
+
+[features]
+default = ["gui"]
+gui = ["dep:gpui", "dep:ksni", "dep:async-channel"]
+
+[dependencies]
+anyhow = "1"
+async-channel = { version = "2", optional = true }
+clap = { version = "4", features = ["derive"] }
+gpui = { version = "=0.2.2", optional = true }
+ksni = { version = "0.3", features = ["blocking"], optional = true }
+# GPUI 0.2.2 uses xattr 0.2, which needs the ENOATTR alias removed in newer libc.
+libc = "=0.2.177"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+
+[package.metadata.cargo-machete]
+ignored = ["libc"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev]
+debug = 0

@@ -10,7 +10,7 @@ self: {
   toml = pkgs.formats.toml {};
 in {
   options.programs.freepilot = {
-    enable = lib.mkEnableOption "freepilot, a DDC/CI monitor control CLI";
+    enable = lib.mkEnableOption "freepilot, a DDC/CI monitor control app";
 
     package = lib.mkOption {
       type = lib.types.package;

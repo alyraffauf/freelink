@@ -33,28 +33,72 @@
       }).config;
 
     home = evalHome {
-      settings = {
-        monitors.desk.serial = "ABC123";
-        profiles.coding = {
-          monitor = "desk";
-          picture-mode = "coding-dark";
-          brightness = 40;
-          vcp."0xd1" = 2;
-        };
-      };
+      settings = lib.mkMerge [
+        {monitors.desk.serial = "ABC123";}
+        {
+          profiles.coding = {
+            monitor = "desk";
+            picture-mode = "coding-dark";
+            brightness = 40;
+            vcp."0xd1" = 2;
+          };
+        }
+      ];
     };
     homeWithoutSettings = evalHome {};
+    homeDisabled = evalHome {
+      enable = false;
+      settings.profiles.ignored.brightness = 40;
+    };
+    homeWithPackageOverride = evalHome {package = pkgs.hello;};
+
+    evalNixos = settings:
+      (import (pkgs.path + "/nixos/lib/eval-config.nix") {
+        inherit system;
+        modules = [
+          self.nixosModules.default
+          {
+            nixpkgs.pkgs = pkgs;
+            system.stateVersion = "26.05";
+            programs.freepilot = settings;
+          }
+        ];
+      }).config;
+    nixosDisabled = evalNixos {};
+    nixosWithPackageOverride = evalNixos {
+      enable = true;
+      package = pkgs.hello;
+    };
   in {
     checks =
       {
+        freepilot-module-options = assert homeDisabled.home.packages == [];
+        assert homeDisabled.xdg.configFile == {};
+        assert homeWithoutSettings.home.packages == [freepilot];
+        assert homeWithPackageOverride.home.packages == [pkgs.hello];
+        assert homeWithPackageOverride.xdg.configFile == {};
+        assert !nixosDisabled.hardware.i2c.enable;
+        assert !(builtins.elem "i2c-dev" nixosDisabled.boot.kernelModules);
+        assert !(builtins.elem freepilot nixosDisabled.environment.systemPackages);
+        assert nixosWithPackageOverride.hardware.i2c.enable;
+        assert builtins.elem "i2c-dev" nixosWithPackageOverride.boot.kernelModules;
+        assert builtins.elem pkgs.hello nixosWithPackageOverride.environment.systemPackages;
+        assert !(builtins.elem freepilot nixosWithPackageOverride.environment.systemPackages);
+          pkgs.runCommand "freepilot-module-options" {} ''
+            touch "$out"
+          '';
+
         # The generated config.toml must load, and the module must add the
         # package and leave config.toml alone when settings are empty.
         freepilot-home-module = assert home.home.packages == [freepilot];
+        assert home.programs.freepilot.settings.monitors.desk.serial == "ABC123";
         assert homeWithoutSettings.xdg.configFile == {};
           pkgs.runCommand "freepilot-home-module" {} ''
             export FREEPILOT_CONFIG=${home.xdg.configFile."freepilot/config.toml".source}
             ${lib.getExe freepilot} profile show coding | tee "$out"
             grep -q 'vcp 0xd1 = 2' "$out"
+            ${lib.getExe freepilot} profile list --json > profiles.json
+            ${lib.getExe pkgs.jq} -e '.coding.monitor == "desk" and .coding.brightness == 40' profiles.json
           '';
       }
       // lib.optionalAttrs (system == "x86_64-linux") {
@@ -71,6 +115,7 @@
               isNormalUser = true;
               extraGroups = [config.hardware.i2c.group];
             };
+            users.users.bob.isNormalUser = true;
           };
           testScript = ''
             machine.wait_for_unit("multi-user.target")
@@ -85,17 +130,19 @@
                 return f"su - alice -c '{command}'"
 
             machine.succeed(alice(f"test -r /dev/{bus} -a -w /dev/{bus}"))
+            machine.fail(f"su - bob -c 'test -r /dev/{bus}'")
+            machine.fail(f"su - bob -c 'test -w /dev/{bus}'")
             machine.succeed(alice("freepilot list"))
             machine.succeed(alice("freepilot codes"))
 
             # The stub can't answer DDC/CI, so this must fail with a
-            # message, not a traceback.
+            # message, not a panic.
             number = bus.removeprefix("i2c-")
             output = machine.fail(
-                alice(f"freepilot --transport i2c --bus {number} get brightness 2>&1")
+                alice(f"freepilot --bus {number} get brightness 2>&1")
             )
             assert "freepilot:" in output, output
-            assert "Traceback" not in output, output
+            assert "panicked" not in output, output
           '';
         };
       };
