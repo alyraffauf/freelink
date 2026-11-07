@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Freepilot
+Comment=Control monitor settings over DDC/CI
+Exec=freepilot
+Icon=video-display
+Terminal=false
+Categories=Settings;HardwareSettings;
+StartupWMClass=freepilot

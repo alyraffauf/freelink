@@ -89,13 +89,13 @@
             machine.succeed(alice("freepilot codes"))
 
             # The stub can't answer DDC/CI, so this must fail with a
-            # message, not a traceback.
+            # message, not a panic.
             number = bus.removeprefix("i2c-")
             output = machine.fail(
-                alice(f"freepilot --transport i2c --bus {number} get brightness 2>&1")
+                alice(f"freepilot --bus {number} get brightness 2>&1")
             )
             assert "freepilot:" in output, output
-            assert "Traceback" not in output, output
+            assert "panicked" not in output, output
           '';
         };
       };
