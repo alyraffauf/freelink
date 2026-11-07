@@ -154,16 +154,16 @@ impl Freepilot {
     fn finish_operation(&mut self, outcome: Outcome) {
         self.busy = false;
         self.displays = outcome.displays;
-        self.auto_bus = outcome.auto_bus;
         self.pending_switch = None;
-        let snapshot = match outcome.result {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                self.error = true;
-                self.message = format!("{error:#}");
-                return;
-            }
-        };
+        let snapshot =
+            match commit_automatic_target(&mut self.auto_bus, outcome.auto_bus, outcome.result) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    self.error = true;
+                    self.message = format!("{error:#}");
+                    return;
+                }
+            };
         self.capabilities = snapshot.capabilities;
         self.config = snapshot.config;
         self.monitor = snapshot.monitor;
@@ -800,6 +800,17 @@ impl Freepilot {
             .child(utility_column)
     }
 }
+/// A failed refresh can propose another bus while the old readings remain visible.
+/// Commit the target only with the snapshot that belongs to it.
+fn commit_automatic_target(
+    current: &mut Option<u32>,
+    candidate: Option<u32>,
+    result: Result<Snapshot>,
+) -> Result<Snapshot> {
+    let snapshot = result?;
+    *current = candidate;
+    Ok(snapshot)
+}
 fn run_operation(request: Request) -> Outcome {
     let displays = match displays::discover(Path::new(displays::DRM_ROOT)) {
         Ok(displays) => displays,
@@ -1161,7 +1172,34 @@ pub fn run(selection: Selection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Operation, read_back_failure};
+    use super::{Operation, Snapshot, commit_automatic_target, read_back_failure};
+    use crate::ui_model;
+    use freepilot::{Status, config::Config};
+
+    #[test]
+    fn failed_replacement_refresh_keeps_the_old_target_and_blocks_writes() {
+        let mut target = Some(7);
+        let connected = [9];
+        let candidate = ui_model::auto_bus(target, &connected, true).unwrap();
+        let failed_read = Err(anyhow::anyhow!("replacement monitor could not be read"));
+
+        assert!(commit_automatic_target(&mut target, candidate, failed_read).is_err());
+        assert_eq!(target, Some(7));
+        assert!(ui_model::auto_bus(target, &connected, false).is_err());
+
+        let snapshot = Snapshot {
+            capabilities: None,
+            config: Config::default(),
+            monitor: None,
+            status: Ok(Status::new()),
+            warning: None,
+        };
+        assert!(commit_automatic_target(&mut target, candidate, Ok(snapshot)).is_ok());
+        assert_eq!(
+            ui_model::auto_bus(target, &connected, false).unwrap(),
+            Some(9)
+        );
+    }
 
     #[test]
     fn read_back_failures_after_a_write_keep_the_write_and_ask_for_a_refresh() {
